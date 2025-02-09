@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import tempfile
 import json
 import re
+from google.cloud import texttospeech
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -19,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Инициализация OpenAI
-client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
 LANG_EMOJIS = {
     'ru': '🇷🇺',
@@ -45,7 +46,7 @@ async def transcribe_audio(audio_file_path: str) -> tuple[str, str]:
     try:
         logger.info(f"Начинаем транскрибацию файла: {audio_file_path}")
         with open(audio_file_path, "rb") as audio_file:
-            response = client.audio.transcriptions.create(
+            response = openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file,
                 response_format="verbose_json"
@@ -88,7 +89,7 @@ async def translate_with_gpt(text: str, source_lang: str) -> dict:
             
         user_prompt = f"Translate this text with attention to context and cultural nuances: {text}"
 
-        response = client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -116,21 +117,45 @@ async def translate_with_gpt(text: str, source_lang: str) -> dict:
     return translations
 
 async def generate_audio(text: str, lang: str) -> bytes:
-    """Генерирует аудио из текста используя OpenAI TTS"""
+    """Генерирует аудио из текста используя OpenAI TTS или Google TTS для индонезийского языка"""
     try:
         logger.info(f"🔊 Генерируем аудио для текста: {text} на языке {lang}")
         
-        # Проверяем, что используем правильный язык для TTS
+        # Для индонезийского языка используем Google Cloud TTS
+        if lang == 'id':
+            google_client = texttospeech.TextToSpeechClient()
+            synthesis_input = texttospeech.SynthesisInput(text=text)
+            
+            voice = texttospeech.VoiceSelectionParams(
+                language_code='id-ID',
+                name='id-ID-Standard-A'
+            )
+            
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.MP3,
+                speaking_rate=1.0
+            )
+            
+            response = google_client.synthesize_speech(
+                input=synthesis_input,
+                voice=voice,
+                audio_config=audio_config
+            )
+            
+            return response.audio_content
+            
+        # Для остальных языков используем OpenAI TTS как раньше
         if lang not in VOICES:
             logger.error(f"❌ Неподдерживаемый язык для TTS: {lang}")
             raise ValueError(f"Unsupported language for TTS: {lang}")
             
-        response = client.audio.speech.create(
+        response = openai_client.audio.speech.create(
             model="tts-1",
             voice=VOICES[lang],
             input=text
         )
         return response.content
+        
     except Exception as e:
         logger.error(f"❌ Ошибка при генерации аудио: {str(e)}", exc_info=True)
         raise
