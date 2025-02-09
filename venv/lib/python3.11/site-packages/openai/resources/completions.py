@@ -1,16 +1,20 @@
-# File generated from our OpenAPI spec by Stainless.
+# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 from __future__ import annotations
 
-from typing import Dict, List, Union, Iterable, Optional, overload
-from typing_extensions import Literal
+from typing import Dict, List, Union, Iterable, Optional
+from typing_extensions import Literal, overload
 
 import httpx
 
 from .. import _legacy_response
-from ..types import Completion, completion_create_params
+from ..types import completion_create_params
 from .._types import NOT_GIVEN, Body, Query, Headers, NotGiven
-from .._utils import required_args, maybe_transform
+from .._utils import (
+    required_args,
+    maybe_transform,
+    async_maybe_transform,
+)
 from .._compat import cached_property
 from .._resource import SyncAPIResource, AsyncAPIResource
 from .._response import to_streamed_response_wrapper, async_to_streamed_response_wrapper
@@ -18,6 +22,8 @@ from .._streaming import Stream, AsyncStream
 from .._base_client import (
     make_request_options,
 )
+from ..types.completion import Completion
+from ..types.chat.chat_completion_stream_options_param import ChatCompletionStreamOptionsParam
 
 __all__ = ["Completions", "AsyncCompletions"]
 
@@ -25,10 +31,21 @@ __all__ = ["Completions", "AsyncCompletions"]
 class Completions(SyncAPIResource):
     @cached_property
     def with_raw_response(self) -> CompletionsWithRawResponse:
+        """
+        This property can be used as a prefix for any HTTP method call to return
+        the raw response object instead of the parsed content.
+
+        For more information, see https://www.github.com/openai/openai-python#accessing-raw-response-data-eg-headers
+        """
         return CompletionsWithRawResponse(self)
 
     @cached_property
     def with_streaming_response(self) -> CompletionsWithStreamingResponse:
+        """
+        An alternative to `.with_raw_response` that doesn't eagerly read the response body.
+
+        For more information, see https://www.github.com/openai/openai-python#with_streaming_response
+        """
         return CompletionsWithStreamingResponse(self)
 
     @overload
@@ -48,6 +65,7 @@ class Completions(SyncAPIResource):
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -66,8 +84,8 @@ class Completions(SyncAPIResource):
           model: ID of the model to use. You can use the
               [List models](https://platform.openai.com/docs/api-reference/models/list) API to
               see all of your available models, or see our
-              [Model overview](https://platform.openai.com/docs/models/overview) for
-              descriptions of them.
+              [Model overview](https://platform.openai.com/docs/models) for descriptions of
+              them.
 
           prompt: The prompt(s) to generate completions for, encoded as a string, array of
               strings, array of tokens, or array of token arrays.
@@ -92,7 +110,7 @@ class Completions(SyncAPIResource):
               existing frequency in the text so far, decreasing the model's likelihood to
               repeat the same line verbatim.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           logit_bias: Modify the likelihood of specified tokens appearing in the completion.
 
@@ -132,7 +150,7 @@ class Completions(SyncAPIResource):
               whether they appear in the text so far, increasing the model's likelihood to
               talk about new topics.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           seed: If specified, our system will make a best effort to sample deterministically,
               such that repeated requests with the same `seed` and parameters should return
@@ -151,7 +169,11 @@ class Completions(SyncAPIResource):
               message.
               [Example Python code](https://cookbook.openai.com/examples/how_to_stream_completions).
 
+          stream_options: Options for streaming response. Only set this when you set `stream: true`.
+
           suffix: The suffix that comes after a completion of inserted text.
+
+              This parameter is only supported for `gpt-3.5-turbo-instruct`.
 
           temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
               make the output more random, while lower values like 0.2 will make it more
@@ -167,7 +189,7 @@ class Completions(SyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -196,6 +218,7 @@ class Completions(SyncAPIResource):
         presence_penalty: Optional[float] | NotGiven = NOT_GIVEN,
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -214,8 +237,8 @@ class Completions(SyncAPIResource):
           model: ID of the model to use. You can use the
               [List models](https://platform.openai.com/docs/api-reference/models/list) API to
               see all of your available models, or see our
-              [Model overview](https://platform.openai.com/docs/models/overview) for
-              descriptions of them.
+              [Model overview](https://platform.openai.com/docs/models) for descriptions of
+              them.
 
           prompt: The prompt(s) to generate completions for, encoded as a string, array of
               strings, array of tokens, or array of token arrays.
@@ -247,7 +270,7 @@ class Completions(SyncAPIResource):
               existing frequency in the text so far, decreasing the model's likelihood to
               repeat the same line verbatim.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           logit_bias: Modify the likelihood of specified tokens appearing in the completion.
 
@@ -287,7 +310,7 @@ class Completions(SyncAPIResource):
               whether they appear in the text so far, increasing the model's likelihood to
               talk about new topics.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           seed: If specified, our system will make a best effort to sample deterministically,
               such that repeated requests with the same `seed` and parameters should return
@@ -299,7 +322,11 @@ class Completions(SyncAPIResource):
           stop: Up to 4 sequences where the API will stop generating further tokens. The
               returned text will not contain the stop sequence.
 
+          stream_options: Options for streaming response. Only set this when you set `stream: true`.
+
           suffix: The suffix that comes after a completion of inserted text.
+
+              This parameter is only supported for `gpt-3.5-turbo-instruct`.
 
           temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
               make the output more random, while lower values like 0.2 will make it more
@@ -315,7 +342,7 @@ class Completions(SyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -344,6 +371,7 @@ class Completions(SyncAPIResource):
         presence_penalty: Optional[float] | NotGiven = NOT_GIVEN,
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -362,8 +390,8 @@ class Completions(SyncAPIResource):
           model: ID of the model to use. You can use the
               [List models](https://platform.openai.com/docs/api-reference/models/list) API to
               see all of your available models, or see our
-              [Model overview](https://platform.openai.com/docs/models/overview) for
-              descriptions of them.
+              [Model overview](https://platform.openai.com/docs/models) for descriptions of
+              them.
 
           prompt: The prompt(s) to generate completions for, encoded as a string, array of
               strings, array of tokens, or array of token arrays.
@@ -395,7 +423,7 @@ class Completions(SyncAPIResource):
               existing frequency in the text so far, decreasing the model's likelihood to
               repeat the same line verbatim.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           logit_bias: Modify the likelihood of specified tokens appearing in the completion.
 
@@ -435,7 +463,7 @@ class Completions(SyncAPIResource):
               whether they appear in the text so far, increasing the model's likelihood to
               talk about new topics.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           seed: If specified, our system will make a best effort to sample deterministically,
               such that repeated requests with the same `seed` and parameters should return
@@ -447,7 +475,11 @@ class Completions(SyncAPIResource):
           stop: Up to 4 sequences where the API will stop generating further tokens. The
               returned text will not contain the stop sequence.
 
+          stream_options: Options for streaming response. Only set this when you set `stream: true`.
+
           suffix: The suffix that comes after a completion of inserted text.
+
+              This parameter is only supported for `gpt-3.5-turbo-instruct`.
 
           temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
               make the output more random, while lower values like 0.2 will make it more
@@ -463,7 +495,7 @@ class Completions(SyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -492,6 +524,7 @@ class Completions(SyncAPIResource):
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | Literal[True] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -520,6 +553,7 @@ class Completions(SyncAPIResource):
                     "seed": seed,
                     "stop": stop,
                     "stream": stream,
+                    "stream_options": stream_options,
                     "suffix": suffix,
                     "temperature": temperature,
                     "top_p": top_p,
@@ -539,10 +573,21 @@ class Completions(SyncAPIResource):
 class AsyncCompletions(AsyncAPIResource):
     @cached_property
     def with_raw_response(self) -> AsyncCompletionsWithRawResponse:
+        """
+        This property can be used as a prefix for any HTTP method call to return
+        the raw response object instead of the parsed content.
+
+        For more information, see https://www.github.com/openai/openai-python#accessing-raw-response-data-eg-headers
+        """
         return AsyncCompletionsWithRawResponse(self)
 
     @cached_property
     def with_streaming_response(self) -> AsyncCompletionsWithStreamingResponse:
+        """
+        An alternative to `.with_raw_response` that doesn't eagerly read the response body.
+
+        For more information, see https://www.github.com/openai/openai-python#with_streaming_response
+        """
         return AsyncCompletionsWithStreamingResponse(self)
 
     @overload
@@ -562,6 +607,7 @@ class AsyncCompletions(AsyncAPIResource):
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -580,8 +626,8 @@ class AsyncCompletions(AsyncAPIResource):
           model: ID of the model to use. You can use the
               [List models](https://platform.openai.com/docs/api-reference/models/list) API to
               see all of your available models, or see our
-              [Model overview](https://platform.openai.com/docs/models/overview) for
-              descriptions of them.
+              [Model overview](https://platform.openai.com/docs/models) for descriptions of
+              them.
 
           prompt: The prompt(s) to generate completions for, encoded as a string, array of
               strings, array of tokens, or array of token arrays.
@@ -606,7 +652,7 @@ class AsyncCompletions(AsyncAPIResource):
               existing frequency in the text so far, decreasing the model's likelihood to
               repeat the same line verbatim.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           logit_bias: Modify the likelihood of specified tokens appearing in the completion.
 
@@ -646,7 +692,7 @@ class AsyncCompletions(AsyncAPIResource):
               whether they appear in the text so far, increasing the model's likelihood to
               talk about new topics.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           seed: If specified, our system will make a best effort to sample deterministically,
               such that repeated requests with the same `seed` and parameters should return
@@ -665,7 +711,11 @@ class AsyncCompletions(AsyncAPIResource):
               message.
               [Example Python code](https://cookbook.openai.com/examples/how_to_stream_completions).
 
+          stream_options: Options for streaming response. Only set this when you set `stream: true`.
+
           suffix: The suffix that comes after a completion of inserted text.
+
+              This parameter is only supported for `gpt-3.5-turbo-instruct`.
 
           temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
               make the output more random, while lower values like 0.2 will make it more
@@ -681,7 +731,7 @@ class AsyncCompletions(AsyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -710,6 +760,7 @@ class AsyncCompletions(AsyncAPIResource):
         presence_penalty: Optional[float] | NotGiven = NOT_GIVEN,
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -728,8 +779,8 @@ class AsyncCompletions(AsyncAPIResource):
           model: ID of the model to use. You can use the
               [List models](https://platform.openai.com/docs/api-reference/models/list) API to
               see all of your available models, or see our
-              [Model overview](https://platform.openai.com/docs/models/overview) for
-              descriptions of them.
+              [Model overview](https://platform.openai.com/docs/models) for descriptions of
+              them.
 
           prompt: The prompt(s) to generate completions for, encoded as a string, array of
               strings, array of tokens, or array of token arrays.
@@ -761,7 +812,7 @@ class AsyncCompletions(AsyncAPIResource):
               existing frequency in the text so far, decreasing the model's likelihood to
               repeat the same line verbatim.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           logit_bias: Modify the likelihood of specified tokens appearing in the completion.
 
@@ -801,7 +852,7 @@ class AsyncCompletions(AsyncAPIResource):
               whether they appear in the text so far, increasing the model's likelihood to
               talk about new topics.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           seed: If specified, our system will make a best effort to sample deterministically,
               such that repeated requests with the same `seed` and parameters should return
@@ -813,7 +864,11 @@ class AsyncCompletions(AsyncAPIResource):
           stop: Up to 4 sequences where the API will stop generating further tokens. The
               returned text will not contain the stop sequence.
 
+          stream_options: Options for streaming response. Only set this when you set `stream: true`.
+
           suffix: The suffix that comes after a completion of inserted text.
+
+              This parameter is only supported for `gpt-3.5-turbo-instruct`.
 
           temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
               make the output more random, while lower values like 0.2 will make it more
@@ -829,7 +884,7 @@ class AsyncCompletions(AsyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -858,6 +913,7 @@ class AsyncCompletions(AsyncAPIResource):
         presence_penalty: Optional[float] | NotGiven = NOT_GIVEN,
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -876,8 +932,8 @@ class AsyncCompletions(AsyncAPIResource):
           model: ID of the model to use. You can use the
               [List models](https://platform.openai.com/docs/api-reference/models/list) API to
               see all of your available models, or see our
-              [Model overview](https://platform.openai.com/docs/models/overview) for
-              descriptions of them.
+              [Model overview](https://platform.openai.com/docs/models) for descriptions of
+              them.
 
           prompt: The prompt(s) to generate completions for, encoded as a string, array of
               strings, array of tokens, or array of token arrays.
@@ -909,7 +965,7 @@ class AsyncCompletions(AsyncAPIResource):
               existing frequency in the text so far, decreasing the model's likelihood to
               repeat the same line verbatim.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           logit_bias: Modify the likelihood of specified tokens appearing in the completion.
 
@@ -949,7 +1005,7 @@ class AsyncCompletions(AsyncAPIResource):
               whether they appear in the text so far, increasing the model's likelihood to
               talk about new topics.
 
-              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation/parameter-details)
+              [See more information about frequency and presence penalties.](https://platform.openai.com/docs/guides/text-generation)
 
           seed: If specified, our system will make a best effort to sample deterministically,
               such that repeated requests with the same `seed` and parameters should return
@@ -961,7 +1017,11 @@ class AsyncCompletions(AsyncAPIResource):
           stop: Up to 4 sequences where the API will stop generating further tokens. The
               returned text will not contain the stop sequence.
 
+          stream_options: Options for streaming response. Only set this when you set `stream: true`.
+
           suffix: The suffix that comes after a completion of inserted text.
+
+              This parameter is only supported for `gpt-3.5-turbo-instruct`.
 
           temperature: What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
               make the output more random, while lower values like 0.2 will make it more
@@ -977,7 +1037,7 @@ class AsyncCompletions(AsyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -1006,6 +1066,7 @@ class AsyncCompletions(AsyncAPIResource):
         seed: Optional[int] | NotGiven = NOT_GIVEN,
         stop: Union[Optional[str], List[str], None] | NotGiven = NOT_GIVEN,
         stream: Optional[Literal[False]] | Literal[True] | NotGiven = NOT_GIVEN,
+        stream_options: Optional[ChatCompletionStreamOptionsParam] | NotGiven = NOT_GIVEN,
         suffix: Optional[str] | NotGiven = NOT_GIVEN,
         temperature: Optional[float] | NotGiven = NOT_GIVEN,
         top_p: Optional[float] | NotGiven = NOT_GIVEN,
@@ -1019,7 +1080,7 @@ class AsyncCompletions(AsyncAPIResource):
     ) -> Completion | AsyncStream[Completion]:
         return await self._post(
             "/completions",
-            body=maybe_transform(
+            body=await async_maybe_transform(
                 {
                     "model": model,
                     "prompt": prompt,
@@ -1034,6 +1095,7 @@ class AsyncCompletions(AsyncAPIResource):
                     "seed": seed,
                     "stop": stop,
                     "stream": stream,
+                    "stream_options": stream_options,
                     "suffix": suffix,
                     "temperature": temperature,
                     "top_p": top_p,

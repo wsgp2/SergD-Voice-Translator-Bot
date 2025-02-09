@@ -1,0 +1,23 @@
+[Unit]
+Description=Telegram Voice Translator Bot
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/home/deploy/telegram_voice_translator
+Environment=PYTHONUNBUFFERED=1
+
+# Активируем виртуальное окружение и запускаем бота
+ExecStart=/bin/bash -c 'source /home/deploy/telegram_voice_translator/venv/bin/activate && python3.11 translator_bot.py'
+
+# Перезапуск при падении
+Restart=always
+RestartSec=10
+
+# Отправляем уведомление при падении
+ExecStopPost=/bin/bash -c 'source /home/deploy/telegram_voice_translator/venv/bin/activate && python3.11 /home/deploy/telegram_voice_translator/notify_error.py "Voice Translator Bot" "$(journalctl -u telegram-translator.service -n 50 --no-pager | tail -n 10)"'
+
+[Install]
+WantedBy=multi-user.target

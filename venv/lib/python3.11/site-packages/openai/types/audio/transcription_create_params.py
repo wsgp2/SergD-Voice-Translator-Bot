@@ -1,4 +1,4 @@
-# File generated from our OpenAPI spec by Stainless.
+# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ from typing import List, Union
 from typing_extensions import Literal, Required, TypedDict
 
 from ..._types import FileTypes
+from ..audio_model import AudioModel
+from ..audio_response_format import AudioResponseFormat
 
 __all__ = ["TranscriptionCreateParams"]
 
@@ -17,29 +19,33 @@ class TranscriptionCreateParams(TypedDict, total=False):
     flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, or webm.
     """
 
-    model: Required[Union[str, Literal["whisper-1"]]]
-    """ID of the model to use. Only `whisper-1` is currently available."""
+    model: Required[Union[str, AudioModel]]
+    """ID of the model to use.
+
+    Only `whisper-1` (which is powered by our open source Whisper V2 model) is
+    currently available.
+    """
 
     language: str
     """The language of the input audio.
 
     Supplying the input language in
-    [ISO-639-1](https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes) format will
-    improve accuracy and latency.
+    [ISO-639-1](https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes) (e.g. `en`)
+    format will improve accuracy and latency.
     """
 
     prompt: str
     """An optional text to guide the model's style or continue a previous audio
     segment.
 
-    The [prompt](https://platform.openai.com/docs/guides/speech-to-text/prompting)
+    The [prompt](https://platform.openai.com/docs/guides/speech-to-text#prompting)
     should match the audio language.
     """
 
-    response_format: Literal["json", "text", "srt", "verbose_json", "vtt"]
+    response_format: AudioResponseFormat
     """
-    The format of the transcript output, in one of these options: `json`, `text`,
-    `srt`, `verbose_json`, or `vtt`.
+    The format of the output, in one of these options: `json`, `text`, `srt`,
+    `verbose_json`, or `vtt`.
     """
 
     temperature: float
@@ -54,7 +60,8 @@ class TranscriptionCreateParams(TypedDict, total=False):
     timestamp_granularities: List[Literal["word", "segment"]]
     """The timestamp granularities to populate for this transcription.
 
-    Any of these options: `word`, or `segment`. Note: There is no additional latency
-    for segment timestamps, but generating word timestamps incurs additional
-    latency.
+    `response_format` must be set `verbose_json` to use timestamp granularities.
+    Either or both of these options are supported: `word`, or `segment`. Note: There
+    is no additional latency for segment timestamps, but generating word timestamps
+    incurs additional latency.
     """

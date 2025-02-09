@@ -1,4 +1,4 @@
-# File generated from our OpenAPI spec by Stainless.
+# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 from .beta import (
     Beta,
@@ -47,6 +47,22 @@ from .models import (
     AsyncModelsWithRawResponse,
     ModelsWithStreamingResponse,
     AsyncModelsWithStreamingResponse,
+)
+from .batches import (
+    Batches,
+    AsyncBatches,
+    BatchesWithRawResponse,
+    AsyncBatchesWithRawResponse,
+    BatchesWithStreamingResponse,
+    AsyncBatchesWithStreamingResponse,
+)
+from .uploads import (
+    Uploads,
+    AsyncUploads,
+    UploadsWithRawResponse,
+    AsyncUploadsWithRawResponse,
+    UploadsWithStreamingResponse,
+    AsyncUploadsWithStreamingResponse,
 )
 from .embeddings import (
     Embeddings,
@@ -142,4 +158,16 @@ __all__ = [
     "AsyncBetaWithRawResponse",
     "BetaWithStreamingResponse",
     "AsyncBetaWithStreamingResponse",
+    "Batches",
+    "AsyncBatches",
+    "BatchesWithRawResponse",
+    "AsyncBatchesWithRawResponse",
+    "BatchesWithStreamingResponse",
+    "AsyncBatchesWithStreamingResponse",
+    "Uploads",
+    "AsyncUploads",
+    "UploadsWithRawResponse",
+    "AsyncUploadsWithRawResponse",
+    "UploadsWithStreamingResponse",
+    "AsyncUploadsWithStreamingResponse",
 ]

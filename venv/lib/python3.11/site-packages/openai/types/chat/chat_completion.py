@@ -1,4 +1,4 @@
-# File generated from our OpenAPI spec by Stainless.
+# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 from typing import List, Optional
 from typing_extensions import Literal
@@ -14,6 +14,9 @@ __all__ = ["ChatCompletion", "Choice", "ChoiceLogprobs"]
 class ChoiceLogprobs(BaseModel):
     content: Optional[List[ChatCompletionTokenLogprob]] = None
     """A list of message content tokens with log probability information."""
+
+    refusal: Optional[List[ChatCompletionTokenLogprob]] = None
+    """A list of message refusal tokens with log probability information."""
 
 
 class Choice(BaseModel):
@@ -55,6 +58,9 @@ class ChatCompletion(BaseModel):
 
     object: Literal["chat.completion"]
     """The object type, which is always `chat.completion`."""
+
+    service_tier: Optional[Literal["scale", "default"]] = None
+    """The service tier used for processing the request."""
 
     system_fingerprint: Optional[str] = None
     """This fingerprint represents the backend configuration that the model runs with.

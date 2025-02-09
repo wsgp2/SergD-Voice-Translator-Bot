@@ -13,10 +13,15 @@ from ._types import (
     FileContent,
     RequestFiles,
     HttpxFileTypes,
+    Base64FileInput,
     HttpxFileContent,
     HttpxRequestFiles,
 )
 from ._utils import is_tuple_t, is_mapping_t, is_sequence_t
+
+
+def is_base64_file_input(obj: object) -> TypeGuard[Base64FileInput]:
+    return isinstance(obj, io.IOBase) or isinstance(obj, os.PathLike)
 
 
 def is_file_content(obj: object) -> TypeGuard[FileContent]:
@@ -34,13 +39,11 @@ def assert_is_file_content(obj: object, *, key: str | None = None) -> None:
 
 
 @overload
-def to_httpx_files(files: None) -> None:
-    ...
+def to_httpx_files(files: None) -> None: ...
 
 
 @overload
-def to_httpx_files(files: RequestFiles) -> HttpxRequestFiles:
-    ...
+def to_httpx_files(files: RequestFiles) -> HttpxRequestFiles: ...
 
 
 def to_httpx_files(files: RequestFiles | None) -> HttpxRequestFiles | None:
@@ -78,13 +81,11 @@ def _read_file_content(file: FileContent) -> HttpxFileContent:
 
 
 @overload
-async def async_to_httpx_files(files: None) -> None:
-    ...
+async def async_to_httpx_files(files: None) -> None: ...
 
 
 @overload
-async def async_to_httpx_files(files: RequestFiles) -> HttpxRequestFiles:
-    ...
+async def async_to_httpx_files(files: RequestFiles) -> HttpxRequestFiles: ...
 
 
 async def async_to_httpx_files(files: RequestFiles | None) -> HttpxRequestFiles | None:

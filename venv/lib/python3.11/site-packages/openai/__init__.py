@@ -1,4 +1,4 @@
-# File generated from our OpenAPI spec by Stainless.
+# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 from __future__ import annotations
 
@@ -6,12 +6,13 @@ import os as _os
 from typing_extensions import override
 
 from . import types
-from ._types import NoneType, Transport, ProxiesTypes
+from ._types import NOT_GIVEN, Omit, NoneType, NotGiven, Transport, ProxiesTypes
 from ._utils import file_from_path
 from ._client import Client, OpenAI, Stream, Timeout, Transport, AsyncClient, AsyncOpenAI, AsyncStream, RequestOptions
 from ._models import BaseModel
 from ._version import __title__, __version__
 from ._response import APIResponse as APIResponse, AsyncAPIResponse as AsyncAPIResponse
+from ._constants import DEFAULT_TIMEOUT, DEFAULT_MAX_RETRIES, DEFAULT_CONNECTION_LIMITS
 from ._exceptions import (
     APIError,
     OpenAIError,
@@ -25,10 +26,14 @@ from ._exceptions import (
     AuthenticationError,
     InternalServerError,
     PermissionDeniedError,
+    LengthFinishReasonError,
     UnprocessableEntityError,
     APIResponseValidationError,
+    ContentFilterFinishReasonError,
 )
+from ._base_client import DefaultHttpxClient, DefaultAsyncHttpxClient
 from ._utils._logs import setup_logging as _setup_logging
+from ._legacy_response import HttpxBinaryResponseContent as HttpxBinaryResponseContent
 
 __all__ = [
     "types",
@@ -37,6 +42,9 @@ __all__ = [
     "NoneType",
     "Transport",
     "ProxiesTypes",
+    "NotGiven",
+    "NOT_GIVEN",
+    "Omit",
     "OpenAIError",
     "APIError",
     "APIStatusError",
@@ -51,6 +59,8 @@ __all__ = [
     "UnprocessableEntityError",
     "RateLimitError",
     "InternalServerError",
+    "LengthFinishReasonError",
+    "ContentFilterFinishReasonError",
     "Timeout",
     "RequestOptions",
     "Client",
@@ -61,12 +71,21 @@ __all__ = [
     "AsyncOpenAI",
     "file_from_path",
     "BaseModel",
+    "DEFAULT_TIMEOUT",
+    "DEFAULT_MAX_RETRIES",
+    "DEFAULT_CONNECTION_LIMITS",
+    "DefaultHttpxClient",
+    "DefaultAsyncHttpxClient",
 ]
 
-from .lib import azure as _azure
+from .lib import azure as _azure, pydantic_function_tool as pydantic_function_tool
 from .version import VERSION as VERSION
 from .lib.azure import AzureOpenAI as AzureOpenAI, AsyncAzureOpenAI as AsyncAzureOpenAI
 from .lib._old_api import *
+from .lib.streaming import (
+    AssistantEventHandler as AssistantEventHandler,
+    AsyncAssistantEventHandler as AsyncAssistantEventHandler,
+)
 
 _setup_logging()
 
@@ -94,6 +113,8 @@ from ._base_client import DEFAULT_TIMEOUT, DEFAULT_MAX_RETRIES
 api_key: str | None = None
 
 organization: str | None = None
+
+project: str | None = None
 
 base_url: str | _httpx.URL | None = None
 
@@ -145,6 +166,17 @@ class _ModuleClient(OpenAI):
         global organization
 
         organization = value
+
+    @property  # type: ignore
+    @override
+    def project(self) -> str | None:
+        return project
+
+    @project.setter  # type: ignore
+    def project(self, value: str | None) -> None:  # type: ignore
+        global project
+
+        project = value
 
     @property
     @override
@@ -297,6 +329,7 @@ def _load_client() -> OpenAI:  # type: ignore[reportUnusedFunction]
         _client = _ModuleClient(
             api_key=api_key,
             organization=organization,
+            project=project,
             base_url=base_url,
             timeout=timeout,
             max_retries=max_retries,
@@ -322,6 +355,7 @@ from ._module_client import (
     files as files,
     images as images,
     models as models,
+    batches as batches,
     embeddings as embeddings,
     completions as completions,
     fine_tuning as fine_tuning,

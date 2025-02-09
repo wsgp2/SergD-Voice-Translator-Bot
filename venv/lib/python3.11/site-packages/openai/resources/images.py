@@ -1,4 +1,4 @@
-# File generated from our OpenAPI spec by Stainless.
+# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 from __future__ import annotations
 
@@ -8,20 +8,20 @@ from typing_extensions import Literal
 import httpx
 
 from .. import _legacy_response
-from ..types import (
-    ImagesResponse,
-    image_edit_params,
-    image_generate_params,
-    image_create_variation_params,
-)
+from ..types import image_edit_params, image_generate_params, image_create_variation_params
 from .._types import NOT_GIVEN, Body, Query, Headers, NotGiven, FileTypes
-from .._utils import extract_files, maybe_transform, deepcopy_minimal
+from .._utils import (
+    extract_files,
+    maybe_transform,
+    deepcopy_minimal,
+    async_maybe_transform,
+)
 from .._compat import cached_property
 from .._resource import SyncAPIResource, AsyncAPIResource
 from .._response import to_streamed_response_wrapper, async_to_streamed_response_wrapper
-from .._base_client import (
-    make_request_options,
-)
+from .._base_client import make_request_options
+from ..types.image_model import ImageModel
+from ..types.images_response import ImagesResponse
 
 __all__ = ["Images", "AsyncImages"]
 
@@ -29,17 +29,28 @@ __all__ = ["Images", "AsyncImages"]
 class Images(SyncAPIResource):
     @cached_property
     def with_raw_response(self) -> ImagesWithRawResponse:
+        """
+        This property can be used as a prefix for any HTTP method call to return
+        the raw response object instead of the parsed content.
+
+        For more information, see https://www.github.com/openai/openai-python#accessing-raw-response-data-eg-headers
+        """
         return ImagesWithRawResponse(self)
 
     @cached_property
     def with_streaming_response(self) -> ImagesWithStreamingResponse:
+        """
+        An alternative to `.with_raw_response` that doesn't eagerly read the response body.
+
+        For more information, see https://www.github.com/openai/openai-python#with_streaming_response
+        """
         return ImagesWithStreamingResponse(self)
 
     def create_variation(
         self,
         *,
         image: FileTypes,
-        model: Union[str, Literal["dall-e-2"], None] | NotGiven = NOT_GIVEN,
+        model: Union[str, ImageModel, None] | NotGiven = NOT_GIVEN,
         n: Optional[int] | NotGiven = NOT_GIVEN,
         response_format: Optional[Literal["url", "b64_json"]] | NotGiven = NOT_GIVEN,
         size: Optional[Literal["256x256", "512x512", "1024x1024"]] | NotGiven = NOT_GIVEN,
@@ -65,14 +76,15 @@ class Images(SyncAPIResource):
               `n=1` is supported.
 
           response_format: The format in which the generated images are returned. Must be one of `url` or
-              `b64_json`.
+              `b64_json`. URLs are only valid for 60 minutes after the image has been
+              generated.
 
           size: The size of the generated images. Must be one of `256x256`, `512x512`, or
               `1024x1024`.
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -93,11 +105,10 @@ class Images(SyncAPIResource):
             }
         )
         files = extract_files(cast(Mapping[str, object], body), paths=[["image"]])
-        if files:
-            # It should be noted that the actual Content-Type header that will be
-            # sent to the server will contain a `boundary` parameter, e.g.
-            # multipart/form-data; boundary=---abc--
-            extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
+        # It should be noted that the actual Content-Type header that will be
+        # sent to the server will contain a `boundary` parameter, e.g.
+        # multipart/form-data; boundary=---abc--
+        extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
         return self._post(
             "/images/variations",
             body=maybe_transform(body, image_create_variation_params.ImageCreateVariationParams),
@@ -114,7 +125,7 @@ class Images(SyncAPIResource):
         image: FileTypes,
         prompt: str,
         mask: FileTypes | NotGiven = NOT_GIVEN,
-        model: Union[str, Literal["dall-e-2"], None] | NotGiven = NOT_GIVEN,
+        model: Union[str, ImageModel, None] | NotGiven = NOT_GIVEN,
         n: Optional[int] | NotGiven = NOT_GIVEN,
         response_format: Optional[Literal["url", "b64_json"]] | NotGiven = NOT_GIVEN,
         size: Optional[Literal["256x256", "512x512", "1024x1024"]] | NotGiven = NOT_GIVEN,
@@ -146,14 +157,15 @@ class Images(SyncAPIResource):
           n: The number of images to generate. Must be between 1 and 10.
 
           response_format: The format in which the generated images are returned. Must be one of `url` or
-              `b64_json`.
+              `b64_json`. URLs are only valid for 60 minutes after the image has been
+              generated.
 
           size: The size of the generated images. Must be one of `256x256`, `512x512`, or
               `1024x1024`.
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -176,11 +188,10 @@ class Images(SyncAPIResource):
             }
         )
         files = extract_files(cast(Mapping[str, object], body), paths=[["image"], ["mask"]])
-        if files:
-            # It should be noted that the actual Content-Type header that will be
-            # sent to the server will contain a `boundary` parameter, e.g.
-            # multipart/form-data; boundary=---abc--
-            extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
+        # It should be noted that the actual Content-Type header that will be
+        # sent to the server will contain a `boundary` parameter, e.g.
+        # multipart/form-data; boundary=---abc--
+        extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
         return self._post(
             "/images/edits",
             body=maybe_transform(body, image_edit_params.ImageEditParams),
@@ -195,7 +206,7 @@ class Images(SyncAPIResource):
         self,
         *,
         prompt: str,
-        model: Union[str, Literal["dall-e-2", "dall-e-3"], None] | NotGiven = NOT_GIVEN,
+        model: Union[str, ImageModel, None] | NotGiven = NOT_GIVEN,
         n: Optional[int] | NotGiven = NOT_GIVEN,
         quality: Literal["standard", "hd"] | NotGiven = NOT_GIVEN,
         response_format: Optional[Literal["url", "b64_json"]] | NotGiven = NOT_GIVEN,
@@ -226,7 +237,8 @@ class Images(SyncAPIResource):
               for `dall-e-3`.
 
           response_format: The format in which the generated images are returned. Must be one of `url` or
-              `b64_json`.
+              `b64_json`. URLs are only valid for 60 minutes after the image has been
+              generated.
 
           size: The size of the generated images. Must be one of `256x256`, `512x512`, or
               `1024x1024` for `dall-e-2`. Must be one of `1024x1024`, `1792x1024`, or
@@ -239,7 +251,7 @@ class Images(SyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -274,17 +286,28 @@ class Images(SyncAPIResource):
 class AsyncImages(AsyncAPIResource):
     @cached_property
     def with_raw_response(self) -> AsyncImagesWithRawResponse:
+        """
+        This property can be used as a prefix for any HTTP method call to return
+        the raw response object instead of the parsed content.
+
+        For more information, see https://www.github.com/openai/openai-python#accessing-raw-response-data-eg-headers
+        """
         return AsyncImagesWithRawResponse(self)
 
     @cached_property
     def with_streaming_response(self) -> AsyncImagesWithStreamingResponse:
+        """
+        An alternative to `.with_raw_response` that doesn't eagerly read the response body.
+
+        For more information, see https://www.github.com/openai/openai-python#with_streaming_response
+        """
         return AsyncImagesWithStreamingResponse(self)
 
     async def create_variation(
         self,
         *,
         image: FileTypes,
-        model: Union[str, Literal["dall-e-2"], None] | NotGiven = NOT_GIVEN,
+        model: Union[str, ImageModel, None] | NotGiven = NOT_GIVEN,
         n: Optional[int] | NotGiven = NOT_GIVEN,
         response_format: Optional[Literal["url", "b64_json"]] | NotGiven = NOT_GIVEN,
         size: Optional[Literal["256x256", "512x512", "1024x1024"]] | NotGiven = NOT_GIVEN,
@@ -310,14 +333,15 @@ class AsyncImages(AsyncAPIResource):
               `n=1` is supported.
 
           response_format: The format in which the generated images are returned. Must be one of `url` or
-              `b64_json`.
+              `b64_json`. URLs are only valid for 60 minutes after the image has been
+              generated.
 
           size: The size of the generated images. Must be one of `256x256`, `512x512`, or
               `1024x1024`.
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -338,14 +362,13 @@ class AsyncImages(AsyncAPIResource):
             }
         )
         files = extract_files(cast(Mapping[str, object], body), paths=[["image"]])
-        if files:
-            # It should be noted that the actual Content-Type header that will be
-            # sent to the server will contain a `boundary` parameter, e.g.
-            # multipart/form-data; boundary=---abc--
-            extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
+        # It should be noted that the actual Content-Type header that will be
+        # sent to the server will contain a `boundary` parameter, e.g.
+        # multipart/form-data; boundary=---abc--
+        extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
         return await self._post(
             "/images/variations",
-            body=maybe_transform(body, image_create_variation_params.ImageCreateVariationParams),
+            body=await async_maybe_transform(body, image_create_variation_params.ImageCreateVariationParams),
             files=files,
             options=make_request_options(
                 extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body, timeout=timeout
@@ -359,7 +382,7 @@ class AsyncImages(AsyncAPIResource):
         image: FileTypes,
         prompt: str,
         mask: FileTypes | NotGiven = NOT_GIVEN,
-        model: Union[str, Literal["dall-e-2"], None] | NotGiven = NOT_GIVEN,
+        model: Union[str, ImageModel, None] | NotGiven = NOT_GIVEN,
         n: Optional[int] | NotGiven = NOT_GIVEN,
         response_format: Optional[Literal["url", "b64_json"]] | NotGiven = NOT_GIVEN,
         size: Optional[Literal["256x256", "512x512", "1024x1024"]] | NotGiven = NOT_GIVEN,
@@ -391,14 +414,15 @@ class AsyncImages(AsyncAPIResource):
           n: The number of images to generate. Must be between 1 and 10.
 
           response_format: The format in which the generated images are returned. Must be one of `url` or
-              `b64_json`.
+              `b64_json`. URLs are only valid for 60 minutes after the image has been
+              generated.
 
           size: The size of the generated images. Must be one of `256x256`, `512x512`, or
               `1024x1024`.
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -421,14 +445,13 @@ class AsyncImages(AsyncAPIResource):
             }
         )
         files = extract_files(cast(Mapping[str, object], body), paths=[["image"], ["mask"]])
-        if files:
-            # It should be noted that the actual Content-Type header that will be
-            # sent to the server will contain a `boundary` parameter, e.g.
-            # multipart/form-data; boundary=---abc--
-            extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
+        # It should be noted that the actual Content-Type header that will be
+        # sent to the server will contain a `boundary` parameter, e.g.
+        # multipart/form-data; boundary=---abc--
+        extra_headers = {"Content-Type": "multipart/form-data", **(extra_headers or {})}
         return await self._post(
             "/images/edits",
-            body=maybe_transform(body, image_edit_params.ImageEditParams),
+            body=await async_maybe_transform(body, image_edit_params.ImageEditParams),
             files=files,
             options=make_request_options(
                 extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body, timeout=timeout
@@ -440,7 +463,7 @@ class AsyncImages(AsyncAPIResource):
         self,
         *,
         prompt: str,
-        model: Union[str, Literal["dall-e-2", "dall-e-3"], None] | NotGiven = NOT_GIVEN,
+        model: Union[str, ImageModel, None] | NotGiven = NOT_GIVEN,
         n: Optional[int] | NotGiven = NOT_GIVEN,
         quality: Literal["standard", "hd"] | NotGiven = NOT_GIVEN,
         response_format: Optional[Literal["url", "b64_json"]] | NotGiven = NOT_GIVEN,
@@ -471,7 +494,8 @@ class AsyncImages(AsyncAPIResource):
               for `dall-e-3`.
 
           response_format: The format in which the generated images are returned. Must be one of `url` or
-              `b64_json`.
+              `b64_json`. URLs are only valid for 60 minutes after the image has been
+              generated.
 
           size: The size of the generated images. Must be one of `256x256`, `512x512`, or
               `1024x1024` for `dall-e-2`. Must be one of `1024x1024`, `1792x1024`, or
@@ -484,7 +508,7 @@ class AsyncImages(AsyncAPIResource):
 
           user: A unique identifier representing your end-user, which can help OpenAI to monitor
               and detect abuse.
-              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids).
+              [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 
           extra_headers: Send extra headers
 
@@ -496,7 +520,7 @@ class AsyncImages(AsyncAPIResource):
         """
         return await self._post(
             "/images/generations",
-            body=maybe_transform(
+            body=await async_maybe_transform(
                 {
                     "prompt": prompt,
                     "model": model,
