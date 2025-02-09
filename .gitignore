@@ -41,3 +41,6 @@ ENV/
 *.ogg
 *.wav
 *.mp3
+
+# Credentials
+credentials/

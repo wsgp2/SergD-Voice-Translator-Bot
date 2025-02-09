@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Инициализация OpenAI
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+google_client = texttospeech.TextToSpeechClient()
 
 LANG_EMOJIS = {
     'ru': '🇷🇺',
@@ -123,8 +124,7 @@ async def generate_audio(text: str, lang: str) -> bytes:
         
         # Для индонезийского языка используем Google Cloud TTS
         if lang == 'id':
-            google_client = texttospeech.TextToSpeechClient()
-            synthesis_input = texttospeech.SynthesisInput(text=text)
+            input_text = texttospeech.SynthesisInput(text=text)
             
             voice = texttospeech.VoiceSelectionParams(
                 language_code='id-ID',
@@ -132,12 +132,11 @@ async def generate_audio(text: str, lang: str) -> bytes:
             )
             
             audio_config = texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.MP3,
-                speaking_rate=1.0
+                audio_encoding=texttospeech.AudioEncoding.MP3
             )
             
             response = google_client.synthesize_speech(
-                input=synthesis_input,
+                input=input_text,
                 voice=voice,
                 audio_config=audio_config
             )
@@ -216,15 +215,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💭 Исходный текст:
 {LANG_EMOJIS[detected_lang]} {translations[detected_lang]}
 
-🌟 Переводы:\n"""
-                if 'en' in translations:
-                    message += f"🇺🇸 {translations['en']}\n\n"
-                if 'id' in translations:
-                    message += f"🇮🇩 {translations['id']}\n"
-                if 'ru' in translations:
-                    message += f"🇷🇺 {translations['ru']}\n"
-                message += "\n🎤 Отправляю озвученный перевод..."
+🌟 Переводы:
+{LANG_EMOJIS['en']} {translations['en']}
 
+{LANG_EMOJIS['id' if detected_lang == 'ru' else 'ru']} {translations['id' if detected_lang == 'ru' else 'ru']}
+
+🎤 Отправляю озвученный перевод..."""
+                
                 # Отправляем текстовый перевод
                 await update.message.reply_text(message.strip())
                 
