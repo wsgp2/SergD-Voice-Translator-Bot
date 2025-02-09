@@ -216,11 +216,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💭 Исходный текст:
 {LANG_EMOJIS[detected_lang]} {translations[detected_lang]}
 
-🌟 Переводы:
-{LANG_EMOJIS['en']} {translations['en']}
-{LANG_EMOJIS['id' if detected_lang == 'ru' else 'ru']} {translations['id' if detected_lang == 'ru' else 'ru']}
-
-🎤 Отправляю озвученный перевод..."""
+🌟 Переводы:\n"""
+                if 'en' in translations:
+                    message += f"🇺🇸 {translations['en']}\n\n"
+                if 'id' in translations:
+                    message += f"🇮🇩 {translations['id']}\n"
+                if 'ru' in translations:
+                    message += f"🇷🇺 {translations['ru']}\n"
+                message += "\n🎤 Отправляю озвученный перевод..."
 
                 # Отправляем текстовый перевод
                 await update.message.reply_text(message.strip())
