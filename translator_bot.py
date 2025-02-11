@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatType
@@ -193,18 +194,26 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка голосовых сообщений в бизнес-режиме"""
-    chat_type = update.message.chat.type if update.message and update.message.chat else "unknown"
-    logger.info(f"🎯 Получено бизнес-сообщение. Тип чата: {chat_type}")
-    await handle_voice(update, context)
+    # Проверяем наличие голосового сообщения
+    if hasattr(update, 'business_message') and update.business_message and update.business_message.voice:
+        chat_type = update.business_message.chat.type if update.business_message.chat else "unknown"
+        logger.info(f"🎯 Получено бизнес-сообщение. Тип чата: {chat_type}")
+        await handle_voice(update, context, is_business=True)
+    elif hasattr(update, 'message') and update.message and update.message.voice:
+        # Если это обычное голосовое сообщение
+        await handle_voice(update, context, is_business=False)
 
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_business: bool = False):
     """Обработка голосовых сообщений"""
     try:
+        # Определяем сообщение для обработки
+        msg_obj = update.business_message if is_business else update.message
+        
         # Отправляем сообщение о начале обработки
-        processing_msg = await update.message.reply_text("🎯 Обрабатываю голосовое сообщение...\n\n🔄 Это займет несколько секунд")
+        processing_msg = await msg_obj.reply_text("🎯 Обрабатываю голосовое сообщение...\n\n🔄 Это займет несколько секунд")
         
         # Скачиваем голосовое сообщение
-        voice = await update.message.voice.get_file()
+        voice = await msg_obj.voice.get_file()
         
         # Создаем временный файл для аудио
         with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_audio:
@@ -234,13 +243,26 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🎤 Отправляю озвученный перевод..."""
                 
+                # Формируем текстовый ответ
+                response_text = f"""🎯 Определен язык: {LANG_EMOJIS[detected_lang]}
+
+💬 Исходный текст:
+{LANG_EMOJIS[detected_lang]} {translations[detected_lang]}
+
+🌟 Переводы:
+{LANG_EMOJIS['en']} {translations['en']}
+
+{LANG_EMOJIS['id' if detected_lang == 'ru' else 'ru']} {translations['id' if detected_lang == 'ru' else 'ru']}
+
+🎤 Отправляю озвученный перевод..."""
+                
                 # Отправляем текстовый перевод
-                await update.message.reply_text(message.strip())
+                await msg_obj.reply_text(response_text)
                 
                 # Генерируем и отправляем аудио перевода на целевом языке
                 target_lang = 'id' if detected_lang == 'ru' else 'ru'
                 target_text = translations[target_lang]
-                logger.info(f"🎤 Генерируем аудио перевода на языке {target_lang}: {target_text}")
+                logger.info(f"🎙 Генерируем аудио перевода на языке {target_lang}: {target_text}")
                 audio_content = await generate_audio(target_text, target_lang)
                 
                 # Сохраняем аудио во временный файл
@@ -248,7 +270,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     temp_tts.write(audio_content)
                     logger.info(f"💾 Сохранено аудио перевода: {temp_tts.name}")
                     # Отправляем аудио перевода
-                    await update.message.reply_voice(temp_tts.name)
+                    await msg_obj.reply_voice(temp_tts.name)
                     
             finally:
                 # Удаляем временные файлы
@@ -256,12 +278,25 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if 'temp_tts' in locals():
                     os.unlink(temp_tts.name)
         
-        # Удаляем сообщение о обработке
-        await processing_msg.delete()
+        # Заменяем сообщение о процессе на звездочку
+        try:
+            logger.info("✨ Завершаем обработку...")
+            await asyncio.sleep(2)
+            await processing_msg.edit_text("✨")
+        except Exception as e:
+            logger.debug(f"💬 Не удалось изменить сообщение: {str(e)}")
         
     except Exception as e:
         logger.error(f"❌ Ошибка при обработке голосового сообщения: {str(e)}", exc_info=True)
-        await update.message.reply_text("😔 Извините, произошла ошибка при обработке сообщения.")
+        try:
+            # Пытаемся отправить ответ через правильный объект сообщения
+            error_message = "😔 Извините, произошла ошибка при обработке сообщения."
+            if is_business and hasattr(update, 'business_message') and update.business_message:
+                await update.business_message.reply_text(error_message)
+            elif hasattr(update, 'message') and update.message:
+                await update.message.reply_text(error_message)
+        except Exception as reply_error:
+            logger.error(f"❌ Ошибка при отправке сообщения об ошибке: {str(reply_error)}")
 
 def main():
     """Запуск бота"""
@@ -284,8 +319,8 @@ def main():
     
     # Обработка всех голосовых сообщений
     application.add_handler(MessageHandler(
-        filters.VOICE,
-        handle_voice,
+        filters.ALL,
+        handle_business_voice,
         block=False
     ))
 
