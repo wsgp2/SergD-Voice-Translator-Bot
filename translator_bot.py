@@ -2,6 +2,7 @@ import os
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ChatType
 from openai import OpenAI
 from dotenv import load_dotenv
 import tempfile
@@ -96,7 +97,7 @@ async def translate_with_gpt(text: str, source_lang: str) -> dict:
         user_prompt = f"Translate this text with attention to context and cultural nuances: {text}"
 
         response = openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -190,6 +191,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'Английский (дополнительно)'
     )
 
+async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка голосовых сообщений в бизнес-режиме"""
+    chat_type = update.message.chat.type if update.message and update.message.chat else "unknown"
+    logger.info(f"🎯 Получено бизнес-сообщение. Тип чата: {chat_type}")
+    await handle_voice(update, context)
+
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка голосовых сообщений"""
     try:
@@ -275,7 +282,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Обработка всех голосовых сообщений (включая бизнес-чаты)
+    # Обработка всех голосовых сообщений
     application.add_handler(MessageHandler(
         filters.VOICE,
         handle_voice,
