@@ -274,7 +274,13 @@ def main():
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    
+    # Обработка всех голосовых сообщений (включая бизнес-чаты)
+    application.add_handler(MessageHandler(
+        filters.VOICE,
+        handle_voice,
+        block=False
+    ))
 
     # Запускаем бота
     application.run_polling(allowed_updates=Update.ALL_TYPES)
