@@ -15,9 +15,14 @@ load_dotenv()
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot.log')
+    ]
 )
 logger = logging.getLogger(__name__)
+logger.info('🚀 Бот запускается...')
 
 # Инициализация OpenAI
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
