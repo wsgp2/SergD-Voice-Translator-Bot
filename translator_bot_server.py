@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import shutil
+import telegram
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -28,6 +29,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.info('🚀 Бот запускается...')
+
+# Глобальные флаги
+disable_message_deletion = True  # Отключаем удаление сообщений, чтобы избежать повторных отправок
 
 # Инициализация OpenAI
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -486,15 +490,107 @@ async def split_long_message(text: str, max_length: int = 4000) -> list:
         
     return parts
 
-async def safe_delete_message(message):
-    """Безопасно удаляет сообщение, игнорируя ошибки если сообщение не найдено или уже удалено"""
+async def safe_delete_message(message, force_delete=False):
+    """Безопасно удаляет сообщение, игнорируя ошибки если сообщение не найдено или уже удалено
+    
+    Параметры:
+    message - объект сообщения для удаления
+    force_delete - если True, удаляем в любом случае; если False, пропускаем удаление, чтобы избежать дублирования
+    """
+    # Добавляем глобальный флаг отключения удаления сообщений
+    global disable_message_deletion
+    
+    # Проверяем, надо ли удалять сообщение
+    if disable_message_deletion and not force_delete:
+        logger.info("Удаление сообщений отключено глобально")
+        return False
+    
     if message:
+        # Проверяем, приватный ли это чат
+        is_private_chat = False
+        if hasattr(message, 'chat') and message.chat and message.chat.type == ChatType.PRIVATE:
+            is_private_chat = True
+        
+        # Проверяем, является ли это бизнес-сообщением
+        is_business = False
+        if hasattr(message, 'business_chat_id'):
+            is_business = True
+        
+        # Если это приватный чат или бизнес-чат и не является принудительным удалением
+        if (is_private_chat or is_business) and not force_delete:
+            logger.info("Не удаляем сообщение в приватном/бизнес чате")
+            return False
+        
+        # Во всех остальных случаях пытаемся удалить
         try:
             await message.delete()
+            logger.info("Сообщение успешно удалено")
             return True
         except Exception as e:
             logger.debug(f"Игнорируемая ошибка при удалении сообщения: {e}")
             return False
+    return False
+
+async def safe_edit_message(context, processing_msg, text, parse_mode='Markdown'):
+    """Безопасно обновляет текст сообщения без удаления и повторной отправки"""
+    if not processing_msg or not text:
+        logger.warning("Не удалось обновить сообщение: отсутствуют обязательные параметры")
+        return False
+    
+    # Проверяем, приватный ли это чат
+    is_private = False
+    is_business_message = False
+    
+    if hasattr(processing_msg, 'chat') and processing_msg.chat and processing_msg.chat.type == ChatType.PRIVATE:
+        is_private = True
+        logger.debug("Обнаружен приватный чат, используем прямое редактирование")
+    
+    # Проверяем, является ли это бизнес-сообщением
+    if hasattr(processing_msg, 'business_chat_id'):
+        is_business_message = True
+        logger.debug("Обнаружено бизнес-сообщение")
+    
+    try:
+        # Пытаемся напрямую редактировать сообщение через объект сообщения (как в translator_bot.py)
+        if hasattr(processing_msg, 'edit_text'):
+            await processing_msg.edit_text(
+                text=text.strip(),
+                parse_mode=parse_mode
+            )
+            logger.debug("Сообщение успешно обновлено через edit_text")
+            return True
+        else:
+            # Если нет метода edit_text, используем context.bot
+            await context.bot.edit_message_text(
+                text=text.strip(),
+                chat_id=processing_msg.chat_id,
+                message_id=processing_msg.message_id,
+                parse_mode=parse_mode
+            )
+            logger.debug("Сообщение успешно обновлено через context.bot")
+            return True
+    except telegram.error.BadRequest as br_error:
+        # Обрабатываем случай, когда текст не изменился
+        if "message is not modified" in str(br_error):
+            logger.debug("Текст сообщения не был изменен")
+            return True  # Это не ошибка, так как текст уже такой как нужно
+        elif "Message to edit not found" in str(br_error) and is_private:
+            # В приватных чатах иногда нельзя редактировать сообщения
+            logger.info("Невозможно редактировать сообщение в приватном чате: сообщение не найдено")
+            # Попробуем отправить новое сообщение
+            try:
+                if hasattr(processing_msg, 'reply_text'):
+                    await processing_msg.reply_text(text.strip(), parse_mode=parse_mode)
+                    logger.debug("Отправлено новое сообщение вместо редактирования")
+                    return True
+            except Exception as reply_error:
+                logger.warning(f"Ошибка при отправке нового сообщения: {reply_error}")
+        else:
+            logger.warning(f"Ошибка при обновлении: {br_error}")
+    except Exception as e:
+        logger.warning(f"Общая ошибка при обновлении сообщения: {e}")
+    
+    # Если мы дошли до этой точки, значит все попытки не удались
     return False
 
 async def safe_send_message(message_obj, text: str, parse_mode: str = None) -> list:
@@ -692,14 +788,32 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"- Генерация аудио: {'✅ Включена' if chat_settings['tts_enabled'] else '❌ Выключена'}"
     )
     
+    # Определяем объект сообщения для ответа (может быть бизнес-сообщение или обычное)
+    message_obj = update.message
+    if not message_obj and hasattr(update, 'business_message') and update.business_message:
+        message_obj = update.business_message
+    
+    if not message_obj:
+        logger.error("Не удалось найти объект сообщения для ответа")
+        return
+        
     # Используем безопасную отправку сообщения
-    await safe_send_message(update.message, message, parse_mode='HTML')
+    await safe_send_message(message_obj, message, parse_mode='HTML')
 
 async def settings_langs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /settings_langs для настройки языков перевода"""
     user = update.effective_user
     chat = update.effective_chat
     
+    # Определяем объект сообщения для ответа (может быть бизнес-сообщение или обычное)
+    message_obj = update.message
+    if not message_obj and hasattr(update, 'business_message') and update.business_message:
+        message_obj = update.business_message
+    
+    if not message_obj:
+        logger.error("Не удалось найти объект сообщения для ответа в settings_langs_command")
+        return
+        
     if not chat:
         return
     
@@ -736,7 +850,7 @@ async def settings_langs_command(update: Update, context: ContextTypes.DEFAULT_T
     args = context.args
     
     if not args:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "❓ Пожалуйста, укажите языки для перевода. Например:\n"
             "`/settings_langs ru en` - для русского и английского\n"
             "Доступные языки: ru (Русский), en (Английский), id (Индонезийский)\n\n"
@@ -757,7 +871,7 @@ async def settings_langs_command(update: Update, context: ContextTypes.DEFAULT_T
             selected_langs.append(lang)
     
     if not selected_langs:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "❌ Не указаны корректные языки. Доступные языки:\n"
             "ru (Русский), en (Английский), id (Индонезийский)"
         )
@@ -767,7 +881,7 @@ async def settings_langs_command(update: Update, context: ContextTypes.DEFAULT_T
     settings[chat_id_str]["enabled_languages"] = selected_langs
     save_chat_settings(settings)
     
-    await update.message.reply_text(
+    await message_obj.reply_text(
         f"✅ Языки перевода успешно обновлены!\n"
         f"Теперь для этого чата будут использоваться следующие языки: {', '.join(selected_langs)}"
     )
@@ -1088,11 +1202,92 @@ async def send_daily_stats(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при отправке ежедневной статистики: {str(e)}", exc_info=True)
 
+async def handle_alternative_commands(update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str, is_business: bool = False) -> bool:
+    """Обработчик альтернативных команд с префиксом ">"""
+    if not message_text.startswith(">"):
+        return False
+    
+    message = update.business_message if is_business else update.message
+    chat_type = message.chat.type if hasattr(message, 'chat') else 'unknown'
+    
+    # Извлекаем команду без префикса ">" и любые аргументы
+    parts = message_text[1:].split()
+    command = parts[0].lower()
+    args = parts[1:] if len(parts) > 1 else []
+    
+    # Сохраняем аргументы в контексте, как это делает стандартный обработчик команд
+    context.args = args
+    
+    logger.info(f"🔍 Обнаружена альтернативная команда: >{command} с аргументами: {args} в {chat_type} чате")
+    
+    # Словарь соответствия альтернативных команд стандартным обработчикам
+    command_handlers = {
+        "start": start_command,
+        "help": help_command,
+        "settings": settings_command,
+        "languages": settings_langs_command,
+        "settings_langs_ru_en": settings_langs_ru_en_command,
+        "settings_langs_ru_id": settings_langs_ru_id_command,
+        "settings_langs_en_id": settings_langs_en_id_command,
+        "mode": settings_mode_command,
+        "settings_mode": settings_mode_command,
+        "settings_mode_translate": settings_mode_translate_command,
+        "settings_mode_summarize": settings_mode_summarize_command,
+        "settings_mode_both": settings_mode_both_command,
+        "settings_mode_perevod": settings_mode_perevod_command,
+        "settings_mode_sammarajz": settings_mode_sammarajz_command, 
+        "settings_mode_bof": settings_mode_bof_command,
+        "tts": settings_tts_command,
+        "tts_on": tts_on_command,
+        "tts_off": tts_off_command,
+        "stats": stats_command
+    }
+    
+    # Проверяем, есть ли такая команда в словаре
+    if command in command_handlers:
+        try:
+            # Выполняем соответствующую команду
+            await command_handlers[command](update, context)
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке альтернативной команды '{command}': {str(e)}", exc_info=True)
+            await message.reply_text(f"😔 Произошла ошибка при выполнении команды '{command}'")
+            return True
+    
+    return False
+
 async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка голосовых сообщений в бизнес-режиме"""
-    chat_type = update.message.chat.type if update.message and update.message.chat else "unknown"
-    logger.info(f"🎯 Получено бизнес-сообщение. Тип чата: {chat_type}")
-    await handle_voice(update, context)
+    """Универсальный обработчик для всех типов сообщений"""
+    # Проверяем наличие бизнес-сообщения
+    if hasattr(update, 'business_message') and update.business_message:
+        message = update.business_message
+        is_business = True
+        chat_type = message.chat.type if hasattr(message, 'chat') else "unknown"
+        
+        # Проверяем текстовые сообщения для альтернативных команд в приватных чатах
+        if hasattr(message, 'text') and message.text and chat_type == ChatType.PRIVATE:
+            if await handle_alternative_commands(update, context, message.text, is_business=True):
+                return
+        
+        # Обрабатываем голосовые сообщения
+        if message.voice:
+            logger.info(f"🎯 Получено бизнес-голосовое сообщение. Тип чата: {chat_type}")
+            await handle_voice(update, context, is_business=True)
+    
+    # Проверяем наличие обычного сообщения
+    elif hasattr(update, 'message') and update.message:
+        message = update.message
+        chat_type = message.chat.type if hasattr(message, 'chat') else "unknown"
+        
+        # Проверяем текстовые сообщения для альтернативных команд в приватных чатах
+        if hasattr(message, 'text') and message.text and chat_type == ChatType.PRIVATE:
+            if await handle_alternative_commands(update, context, message.text, is_business=False):
+                return
+        
+        # Обрабатываем голосовые сообщения
+        if message.voice:
+            logger.info(f"Получено обычное голосовое сообщение. Тип чата: {chat_type}")
+            await handle_voice(update, context, is_business=False)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_business: bool = False):
     """Обработка голосовых сообщений с учетом настроек чата"""
@@ -1214,8 +1409,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                 # Больше не удаляем исходное сообщение
                 message_deleted = False
                 
-                # Флаг для отслеживания, было ли уже отправлено сообщение
+                # Флаги для отслеживания состояния сообщений
                 message_sent = False
+                message_successfully_updated = False  # Флаг для отслеживания успешного обновления сообщения
                 
                 # Начинаем блок try для обработки отправки результатов
                 try:
@@ -1266,13 +1462,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                             )
                             
                             # И отдельно отправляем текст разделенным
-                            await send_split_message(
-                                context=context,
-                                chat_id=chat_id,
-                                message_text=result_message.strip(),
-                                reply_to_message_id=sent_msg.message_id,
-                                parse_mode='Markdown'
-                            )
+                            # Только если мы не обновили сообщение ранее (WhatsApp избавляемся от дублей)
+                            if not message_successfully_updated:
+                                await send_split_message(
+                                    context=context,
+                                    chat_id=chat_id,
+                                    message_text=result_message.strip(),
+                                    reply_to_message_id=sent_msg.message_id,
+                                    parse_mode='Markdown'
+                                )
                         else:
                             # Если текст помещается в капшен, отправляем с ним
                             sent_msg = await context.bot.send_voice(
@@ -1281,20 +1479,20 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                                 caption=result_message.strip(),
                                 parse_mode='Markdown'
                             )
+                            # Отмечаем, что мы уже отправили сообщение с переводом в капшене
+                            message_sent = True
                     # Если не выполнено ни одно из предыдущих условий, просто отправляем текстовый ответ
                     else:
                         # Проверяем длину сообщения - для длинных сразу используем разделение
                         message_length = len(result_message.strip())
                         
-                        # Для длинных сообщений (>1000 символов) сразу используем разделение
+                        # Для длинных сообщений (>1000 символов) используем разделение без удаления
                         if message_length > 1000 or 'summary' in result and result['summary']:
                             logger.info(f"Длинное сообщение ({message_length} символов) или режим саммаризации: используем разделение")
-                            # Удаляем промежуточное сообщение
+                            
+                            # Проверяем - если уже есть обновленное сообщение, не удаляем его
                             if processing_msg:
-                                try:
-                                    await safe_delete_message(processing_msg)
-                                except Exception as e:
-                                    logger.error(f"Ошибка при удалении сообщения: {e}", exc_info=True)
+                                logger.info("Не удаляем сообщение перед отправкой длинного сообщения")
                             
                             # Отправляем разделенное сообщение и отмечаем флаг
                             await send_split_message(
@@ -1308,22 +1506,103 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                         else:
                             # Для коротких сообщений пробуем редактировать
                             if processing_msg:
-                                try:
-                                    # Используем context.bot.edit_message_text вместо processing_msg.edit_text
-                                    await context.bot.edit_message_text(
-                                        text=result_message.strip(),
-                                        chat_id=processing_msg.chat_id,
-                                        message_id=processing_msg.message_id,
-                                        parse_mode='Markdown'
-                                    )
-                                except Exception as e:
-                                    logger.error(f"Ошибка при обновлении сообщения: {e}", exc_info=True)
-                                    # Удаляем промежуточное сообщение
-                                    try:
-                                        await safe_delete_message(processing_msg)
-                                    except:
-                                        pass
-                                    # Отправляем разделенное сообщение
+                                # Используем безопасную функцию обновления сообщения
+                                success = await safe_edit_message(context, processing_msg, result_message.strip())
+                                if success:
+                                    logger.info("Сообщение успешно обновлено")
+                                    message_successfully_updated = True  # Помечаем сообщение как успешно обновленное
+                                    
+                                    # !!! ВАЖНО !!! Раннее завершение функции при успешном обновлении сообщения
+                                    # Это предотвращает дублирование сообщений
+                                    
+                                    # Удаляем временный файл перед выходом, если он существует
+                                    if voice_copy_path and os.path.exists(voice_copy_path):
+                                        os.unlink(voice_copy_path)
+                                    
+                                    # Обрабатываем TTS отдельно
+                                    if tts_enabled and mode in [MODE_TRANSLATE, MODE_BOTH]:
+                                        # Выбираем язык для озвучки - первый из списка доступных, исключая исходный
+                                        target_langs = [lang for lang in enabled_languages if lang != detected_lang]
+                                        if target_langs:
+                                            target_lang = target_langs[0]
+                                            target_text = result["translations"].get(target_lang)
+                                            if target_text:
+                                                await process_tts_async(target_text, target_lang, chat_id, context, message.message_id)
+                                    
+                                    # Завершаем функцию, чтобы избежать любых дальнейших действий и дублирования сообщений
+                                    return
+                                else:
+                                    # Если не удалось обновить сообщение, пробуем разные способы восстановления
+                                    logger.warning("Не удалось обновить сообщение")
+                                    
+                                    # Пробуем альтернативный метод обновления сообщения
+                                    if not message_successfully_updated and hasattr(processing_msg, 'edit_text'):
+                                        try:
+                                            await processing_msg.edit_text(
+                                                text=result_message.strip(),
+                                                parse_mode='Markdown'
+                                            )
+                                            message_successfully_updated = True
+                                            logger.info("Сообщение обновлено резервным способом")
+                                        except Exception as edit_error:
+                                            logger.warning(f"Ошибка резервного обновления: {edit_error}")
+                                    
+                                    # Если не удалось обновить сообщение никаким способом, тогда удаляем и отправляем заново
+                                    # НО! Для приватных чатов не удаляем сообщения, чтобы избежать дублирования
+                                    if not message_successfully_updated:  
+                                        # Проверяем, является ли это приватным чатом
+                                        is_private_chat = False
+                                        if (hasattr(message, 'chat') and message.chat and message.chat.type == ChatType.PRIVATE) or \
+                                           (hasattr(processing_msg, 'chat') and processing_msg.chat and processing_msg.chat.type == ChatType.PRIVATE):
+                                            is_private_chat = True
+                                        
+                                        # Проверяем, является ли это бизнес-сообщением
+                                        is_business = False
+                                        if hasattr(message, 'business_chat_id') or hasattr(processing_msg, 'business_chat_id'):
+                                            is_business = True
+                                        
+                                        # Если это приватный чат или бизнес-сообщение, не пытаемся удалять - просто отправляем новое сообщение
+                                        if is_private_chat or is_business:
+                                            logger.info("Не удаляем сообщение в приватном/бизнес чате во избежание дублирования")
+                                            try:
+                                                # Отправляем новое сообщение, но не удаляем предыдущее
+                                                await send_split_message(
+                                                    context=context,
+                                                    chat_id=chat_id,
+                                                    message_text=result_message.strip(),
+                                                    reply_to_message_id=message.message_id,
+                                                    parse_mode='Markdown'
+                                                )
+                                                message_successfully_updated = True  # Помечаем как обработанное
+                                            except Exception as inner_error:
+                                                logger.error(f"Не удалось отправить новое сообщение: {inner_error}")
+                                        else:
+                                            # Для групповых чатов тоже не удаляем сообщения, а просто отправляем новое
+                                            logger.info("Для группового чата не удаляем сообщение, отправляем новое")
+                                            try:
+                                                # Отправляем новое сообщение без удаления предыдущего
+                                                await send_split_message(
+                                                    context=context,
+                                                    chat_id=chat_id,
+                                                    message_text=result_message.strip(),
+                                                    reply_to_message_id=message.message_id,
+                                                    parse_mode='Markdown'
+                                                )
+                                                message_successfully_updated = True  # Помечаем как обработанное
+                                            except Exception as inner_error:
+                                                logger.error(f"Не удалось отправить новое сообщение: {inner_error}")
+                            else:
+                                # Проверяем оба флага. Если сообщение успешно обновлено или отправлено, мы не делаем ничего дополнительного
+                                # Исправлено для предотвращения дублирования сообщений
+                                if message_successfully_updated:
+                                    logger.info(f"Сообщение успешно обновлено ранее, не дублируем")
+                                    # Ничего не делаем, сообщение уже обновлено
+                                elif message_sent:
+                                    logger.info(f"Сообщение уже отправлено ранее, не дублируем")
+                                    # Ничего не делаем, сообщение уже отправлено
+                                else:
+                                    # Только если сообщение не было ни обновлено, ни отправлено - отправляем его
+                                    logger.info("Отправляем новое сообщение, так как ранее не было отправлено")
                                     await send_split_message(
                                         context=context,
                                         chat_id=chat_id,
@@ -1331,15 +1610,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                                         reply_to_message_id=message.message_id,
                                         parse_mode='Markdown'
                                     )
-                            else:
-                                # Отправляем новое сообщение
-                                await send_split_message(
-                                    context=context,
-                                    chat_id=chat_id,
-                                    message_text=result_message.strip(),
-                                    reply_to_message_id=message.message_id,
-                                    parse_mode='Markdown'
-                                )
+                                    message_sent = True
                     
                     # Удаляем временный файл если он существует
                     if voice_copy_path and os.path.exists(voice_copy_path):
@@ -1438,7 +1709,18 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                         target_text = result["translations"].get(target_lang)
                         
                         if target_text:
-                            await message.reply_text(f"🎤 Отправляю озвученный перевод на {LANG_EMOJIS.get(target_lang, '')}...")
+                            # Проверяем тип чата, чтобы избежать дублирования в приватных
+                            chat_type = message.chat.type if hasattr(message, 'chat') else "unknown"
+                            is_private = chat_type == ChatType.PRIVATE
+                            
+                            # В приватных чатах отправляем дополнительное сообщение только если основной перевод
+                            # уже был успешно отправлен или обновлен ранее
+                            should_send_notification = not is_private or (is_private and (message_successfully_updated or message_sent))
+                            
+                            if should_send_notification:
+                                await message.reply_text(f"🎤 Отправляю озвученный перевод на {LANG_EMOJIS.get(target_lang, '')}...")
+                            else:
+                                logger.info(f"Не отправляем дополнительное сообщение об аудио в приватном чате")
                             
                             try:
                                 audio_content = await generate_audio(target_text, target_lang)
@@ -1524,13 +1806,14 @@ def main():
     # Запланированная отправка ежедневной статистики
     # Отправка будет происходить автоматически по расписанию
     
-    # Обработка всех голосовых сообщений
-    # Добавляем обработчик для всех голосовых сообщений
+    # Обработка всех сообщений
+    # Используем только один универсальный обработчик, как в translator_bot.py
     application.add_handler(MessageHandler(
-        filters.VOICE & (~filters.COMMAND),
-        handle_voice,
+        filters.ALL,
+        handle_business_voice,
         block=False
     ))
+    logger.info("Добавлен универсальный обработчик для всех типов сообщений")
 
     # Запускаем бота
     application.run_polling(allowed_updates=Update.ALL_TYPES)
