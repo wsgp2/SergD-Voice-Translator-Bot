@@ -2,9 +2,9 @@
   "-1002220257817": {
     "enabled_languages": [
       "ru",
-      "id"
+      "en"
     ],
-    "mode": "translate",
+    "mode": "summarize",
     "tts_enabled": false
   },
   "531712920": {

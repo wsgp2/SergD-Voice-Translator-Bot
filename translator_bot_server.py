@@ -113,9 +113,10 @@ async def send_split_message(context, chat_id, message_text, reply_to_message_id
     """Отправляет сообщение, разделяя его на части, если оно слишком длинное"""
     # Максимальная длина сообщения в Telegram
     MAX_MESSAGE_LENGTH = 3000  # Используем значение меньше 4096 для безопасности
+    MAX_PART_LENGTH = MAX_MESSAGE_LENGTH - 20  # Учитываем место для маркера части и запас
     
     # Если сообщение меньше максимальной длины, отправляем как есть
-    if len(message_text) <= MAX_MESSAGE_LENGTH:
+    if len(message_text) <= MAX_PART_LENGTH:
         return await context.bot.send_message(
             chat_id=chat_id,
             text=message_text,
@@ -125,45 +126,56 @@ async def send_split_message(context, chat_id, message_text, reply_to_message_id
     
     # Если сообщение слишком длинное, разделяем его на части
     parts = []
-    current_part = ""
     
-    # Разделяем по строкам для сохранения целостности параграфов
-    lines = message_text.split('\n')
+    # Разделяем сообщение на части по MAX_PART_LENGTH символов
+    for i in range(0, len(message_text), MAX_PART_LENGTH):
+        parts.append(message_text[i:i + MAX_PART_LENGTH])
     
-    for line in lines:
-        # Если добавление строки превысит лимит, сохраняем текущую часть и начинаем новую
-        if len(current_part) + len(line) + 1 > MAX_MESSAGE_LENGTH:
-            parts.append(current_part)
-            current_part = line + '\n'
-        else:
-            current_part += line + '\n'
-    
-    # Не забываем последнюю часть
-    if current_part:
-        parts.append(current_part)
+    logger.info(f"Сообщение разделено на {len(parts)} частей")
     
     # Отправляем каждую часть
     sent_messages = []
     first_message = None
     
     for i, part in enumerate(parts):
-        if i == 0:
-            # Первую часть отправляем с reply_to_message_id
-            msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"{part.strip()}\n\n(Часть {i+1}/{len(parts)})",
-                reply_to_message_id=reply_to_message_id,
-                parse_mode=parse_mode
-            )
-            first_message = msg
-        else:
-            # Остальные части просто отправляем в тот же чат
-            msg = await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"{part.strip()}\n\n(Часть {i+1}/{len(parts)})",
-                parse_mode=parse_mode
-            )
-        sent_messages.append(msg)
+        part_text = part.strip()
+        # Добавляем маркер части только если частей больше одной
+        if len(parts) > 1:
+            part_text += f"\n\n(Часть {i+1}/{len(parts)})"
+        
+        try:
+            if i == 0:
+                # Первую часть отправляем с reply_to_message_id
+                msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=part_text,
+                    reply_to_message_id=reply_to_message_id,
+                    parse_mode=parse_mode
+                )
+                first_message = msg
+            else:
+                # Остальные части просто отправляем в тот же чат
+                msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=part_text,
+                    parse_mode=parse_mode
+                )
+            sent_messages.append(msg)
+        except Exception as e:
+            logger.error(f"Ошибка при отправке части {i+1}/{len(parts)}: {e}", exc_info=True)
+            # Если часть слишком длинная, пробуем укоротить
+            shortened_text = part_text[:MAX_PART_LENGTH//2] + "...\n[\u0421ообщение слишком длинное, часть пропущена]\n..."
+            try:
+                msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=shortened_text,
+                    parse_mode=None  # Отключаем парсинг разметки для безопасности
+                )
+                sent_messages.append(msg)
+                if i == 0 and not first_message:
+                    first_message = msg
+            except Exception as e2:
+                logger.error(f"Не удалось отправить даже укороченное сообщение: {e2}", exc_info=True)
     
     return first_message
 
@@ -379,13 +391,15 @@ async def process_message_content(text: str, source_lang: str, chat_settings: di
             mode = MODE_TRANSLATE
             logger.info(f"Короткое голосовое сообщение ({voice_duration} сек): только перевод без саммаризации")
         elif mode == MODE_SUMMARIZE:
-            logger.info(f"Короткое голосовое сообщение ({voice_duration} сек): саммаризация не выполняется")
+            # Для коротких сообщений в режиме саммаризации ничего не делаем
+            logger.info(f"Короткое голосовое сообщение ({voice_duration} сек): в режиме саммаризации игнорируем короткие сообщения")
+            # Возвращаем специальный флаг, чтобы бот ничего не делал
             return {
                 "original": text,
                 "translations": {},
                 "summary": None,
                 "source_lang": source_lang,
-                "message": "Сообщение слишком короткое для саммаризации (<30 сек). Используйте режим /mode translate для коротких сообщений."
+                "ignore": True  # Специальный флаг для игнорирования сообщения
             }
     
     # Выполняем перевод, если это требуется
@@ -462,6 +476,17 @@ async def split_long_message(text: str, max_length: int = 4000) -> list:
         current_pos = split_pos + 1
         
     return parts
+
+async def safe_delete_message(message):
+    """Безопасно удаляет сообщение, игнорируя ошибки если сообщение не найдено или уже удалено"""
+    if message:
+        try:
+            await message.delete()
+            return True
+        except Exception as e:
+            logger.debug(f"Игнорируемая ошибка при удалении сообщения: {e}")
+            return False
+    return False
 
 async def safe_send_message(message_obj, text: str, parse_mode: str = None) -> list:
     """Безопасно отправляет сообщение, разбивая его на части при необходимости"""
@@ -1090,6 +1115,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
         # Проверка длительности голосового сообщения
         voice_duration = message.voice.duration if message.voice and hasattr(message.voice, 'duration') else 0
         
+        # Проверка коротких сообщений в режиме саммаризации - просто игнорируем их
+        if voice_duration < 30 and mode == MODE_SUMMARIZE:
+            logger.info(f"Короткое голосовое сообщение ({voice_duration} сек): в режиме саммаризации игнорируем короткие сообщения")
+            # Ранний возврат - не отправляем никаких уведомлений и не выполняем запросы к API
+            return
+        
         # Автоматическая саммаризация для сообщений длиннее 30 секунд
         if voice_duration > 30:
             if mode == MODE_TRANSLATE:
@@ -1107,7 +1138,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
         # Проверяем, не является ли сообщение пересланным
         is_forwarded = hasattr(message, 'forward_date') and message.forward_date is not None
         
-        # Для собственных сообщений не отправляем промежуточное сообщение
         # Всегда отправляем уведомление о начале обработки голосового сообщения
         processing_msg = await message.reply_text("🔄 Обрабатываю голосовое сообщение...")
         
@@ -1163,27 +1193,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                     if OWNER_ID and str(user_id) == str(OWNER_ID) or user_id and user_id == context.bot.id:
                         is_owner_message = True
                         
-                # Проверяем, не является ли сообщение пересланным (проверяем по forward_date, который всегда присутствует у пересланных сообщений)
+                # Проверяем, не является ли сообщение пересланным
                 is_forwarded = hasattr(message, 'forward_date') and message.forward_date is not None
-                
-                # Отправляем сообщение о начале обработки, если это не сообщение от бота
-                processing_msg = None
-                if message.from_user.id != context.bot.id:
-                    # Отправляем сообщение о начале обработки, как ответ на исходное
-                    processing_msg = await message.reply_text("⚙️ Обрабатываю голосовое сообщение...⚙️")
-                else:
-                    # Для сообщений от бота (бизнес режим), работаем с тем же сообщением
-                    if hasattr(message, 'text'):
-                        # Изменяем текстовое сообщение от бота
-                        try:
-                            processing_msg = await message.edit_text(message.text + "\n\n⚙️ Обрабатываю...⚙️")
-                        except Exception as e:
-                            logger.warning(f"Не удалось изменить сообщение бота: {e}")
-                            # Если не удалось изменить, отправляем новое
-                            processing_msg = await message.reply_text("⚙️ Обрабатываю...⚙️")
-                    else:
-                        # Если не текстовое сообщение, отправляем ответ
-                        processing_msg = await message.reply_text("⚙️ Обрабатываю...⚙️")
                 
                 # Сохраняем голосовое сообщение во временный файл, если требуется для TTS
                 voice_copy_path = None
@@ -1197,17 +1208,43 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                 
                 # Начинаем блок try для обработки отправки результатов
                 try:
+                    # Проверяем флаг ignore - если он установлен, просто удаляем промежуточное сообщение и завершаем обработку
+                    if "ignore" in result and result["ignore"]:
+                        logger.info("Игнорируем короткое сообщение в режиме саммаризации")
+                        if processing_msg:
+                            try:
+                                await safe_delete_message(processing_msg)
+                            except Exception as e:
+                                logger.error(f"Ошибка при удалении сообщения: {e}", exc_info=True)
+                        return
+                    
                     # Обработка специальных сообщений
                     if "message" in result:
                         # Если есть специальное сообщение (например, о коротком сообщении), просто отвечаем текстом
                         if processing_msg:
                             try:
-                                await processing_msg.edit_text(result["message"], parse_mode='Markdown')
+                                # Используем метод context.bot.edit_message_text вместо processing_msg.edit_text для надежности
+                                await context.bot.edit_message_text(
+                                    text=result["message"],
+                                    chat_id=processing_msg.chat_id,
+                                    message_id=processing_msg.message_id,
+                                    parse_mode='Markdown'
+                                )
+                                logger.info(f"Отправлено уведомление: {result['message']}")
                             except Exception as e:
                                 logger.error(f"Ошибка при обновлении сообщения: {e}", exc_info=True)
+                                # Если не удалось обновить сообщение, пробуем удалить и отправить новое
+                                try:
+                                    await safe_delete_message(processing_msg)
+                                except:
+                                    pass
                                 await message.reply_text(result["message"], parse_mode='Markdown')
                         else:
                             await message.reply_text(result["message"], parse_mode='Markdown')
+                        
+                        # Ранний возврат: если это специальное сообщение, прекращаем обработку
+                        # и не отправляем текст сообщения
+                        return
                     # Проверяем длину итогового сообщения и TTS настройки
                     elif tts_enabled and "message" not in result:
                         # Если сообщение слишком длинное, отправляем голосовое без капшена
@@ -1235,17 +1272,62 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                             )
                     # Если не выполнено ни одно из предыдущих условий, просто отправляем текстовый ответ
                     else:
-                        # Если есть сообщение об обработке, редактируем его
-                        if processing_msg:
-                            try:
-                                await processing_msg.edit_text(result_message.strip(), parse_mode='Markdown')
-                            except Exception as e:
-                                logger.error(f"Ошибка при обновлении сообщения: {e}", exc_info=True)
-                                # Если не удалось обновить, отправляем новый ответ
-                                await message.reply_text(result_message.strip(), parse_mode='Markdown')
+                        # Проверяем длину сообщения - для длинных сразу используем разделение
+                        message_length = len(result_message.strip())
+                        
+                        # Для длинных сообщений (>1000 символов) сразу используем разделение
+                        if message_length > 1000 or 'summary' in result and result['summary']:
+                            logger.info(f"Длинное сообщение ({message_length} символов) или режим саммаризации: используем разделение")
+                            # Удаляем промежуточное сообщение
+                            if processing_msg:
+                                try:
+                                    await safe_delete_message(processing_msg)
+                                except Exception as e:
+                                    logger.error(f"Ошибка при удалении сообщения: {e}", exc_info=True)
+                            
+                            # Отправляем разделенное сообщение
+                            await send_split_message(
+                                context=context,
+                                chat_id=chat_id,
+                                message_text=result_message.strip(),
+                                reply_to_message_id=message.message_id,
+                                parse_mode='Markdown'
+                            )
                         else:
-                            # Иначе отправляем новый ответ
-                            await message.reply_text(result_message.strip(), parse_mode='Markdown')
+                            # Для коротких сообщений пробуем редактировать
+                            if processing_msg:
+                                try:
+                                    # Используем context.bot.edit_message_text вместо processing_msg.edit_text
+                                    await context.bot.edit_message_text(
+                                        text=result_message.strip(),
+                                        chat_id=processing_msg.chat_id,
+                                        message_id=processing_msg.message_id,
+                                        parse_mode='Markdown'
+                                    )
+                                except Exception as e:
+                                    logger.error(f"Ошибка при обновлении сообщения: {e}", exc_info=True)
+                                    # Удаляем промежуточное сообщение
+                                    try:
+                                        await safe_delete_message(processing_msg)
+                                    except:
+                                        pass
+                                    # Отправляем разделенное сообщение
+                                    await send_split_message(
+                                        context=context,
+                                        chat_id=chat_id,
+                                        message_text=result_message.strip(),
+                                        reply_to_message_id=message.message_id,
+                                        parse_mode='Markdown'
+                                    )
+                            else:
+                                # Отправляем новое сообщение
+                                await send_split_message(
+                                    context=context,
+                                    chat_id=chat_id,
+                                    message_text=result_message.strip(),
+                                    reply_to_message_id=message.message_id,
+                                    parse_mode='Markdown'
+                                )
                     
                     # Удаляем временный файл если он существует
                     if voice_copy_path and os.path.exists(voice_copy_path):
@@ -1284,7 +1366,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                         except Exception as e:
                             # Если не получилось (например, сообщение слишком длинное), удаляем сообщение об обработке
                             logger.warning(f"Не удалось отредактировать сообщение: {e}")
-                            await processing_msg.delete()
+                            await safe_delete_message(processing_msg)
                             
                             # И отправляем разделенное сообщение
                             await send_split_message(
@@ -1311,7 +1393,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                     else:
                         # Для остальных - отправляем новое сообщение и удаляем сообщение о обработке, если оно есть
                         if processing_msg:
-                            await processing_msg.delete()
+                            await safe_delete_message(processing_msg)
                         
                         # Отправляем сообщение с учетом возможной большой длины
                         try:
