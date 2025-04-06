@@ -1,0 +1,18 @@
+{
+  "-1002220257817": {
+    "enabled_languages": [
+      "ru",
+      "id"
+    ],
+    "mode": "translate",
+    "tts_enabled": false
+  },
+  "531712920": {
+    "enabled_languages": [
+      "ru",
+      "en"
+    ],
+    "mode": "both",
+    "tts_enabled": false
+  }
+}
