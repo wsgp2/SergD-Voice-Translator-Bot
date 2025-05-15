@@ -1353,7 +1353,15 @@ async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TY
         # Обрабатываем голосовые сообщения
         if message.voice:
             logger.info(f"🎯 Получено бизнес-голосовое сообщение. Тип чата: {chat_type}")
-            await handle_voice(update, context, is_business=True)
+            await handle_voice(update, context, is_business=True, media_type="voice")
+        # Обрабатываем аудиофайлы, отправленные как документы
+        elif message.document and message.document.mime_type and message.document.mime_type.startswith('audio/'):
+            logger.info(f"🎵 Получен аудио-документ (бизнес). Тип чата: {chat_type}, MIME: {message.document.mime_type}")
+            await handle_voice(update, context, is_business=True, media_type="document")
+        # Обрабатываем аудиофайлы, отправленные с метаданными (music)
+        elif message.audio:
+            logger.info(f"🎵 Получен аудиофайл с метаданными (бизнес). Тип чата: {chat_type}")
+            await handle_voice(update, context, is_business=True, media_type="audio")
     
     # Проверяем наличие обычного сообщения
     elif hasattr(update, 'message') and update.message:
@@ -1368,15 +1376,32 @@ async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TY
         # Обрабатываем голосовые сообщения
         if message.voice:
             logger.info(f"Получено обычное голосовое сообщение. Тип чата: {chat_type}")
-            await handle_voice(update, context, is_business=False)
+            await handle_voice(update, context, is_business=False, media_type="voice")
+        # Обрабатываем аудиофайлы, отправленные как документы
+        elif message.document and message.document.mime_type and message.document.mime_type.startswith('audio/'):
+            logger.info(f"🎵 Получен аудио-документ. Тип чата: {chat_type}, MIME: {message.document.mime_type}")
+            await handle_voice(update, context, is_business=False, media_type="document")
+        # Обрабатываем аудиофайлы, отправленные с метаданными (music)
+        elif message.audio:
+            logger.info(f"🎵 Получен аудиофайл с метаданными. Тип чата: {chat_type}")
+            await handle_voice(update, context, is_business=False, media_type="audio")
 
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_business: bool = False):
-    """Обработка голосовых сообщений с учетом настроек чата"""
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_business: bool = False, media_type: str = "voice"):
+    """Обработка голосовых и аудио сообщений с учетом настроек чата"""
     try:
         # Определяем объект сообщения в зависимости от типа
         message = update.business_message if is_business else update.message
         
-        if not message or not message.voice:
+        # Проверяем наличие сообщения и правильного медиа контента в зависимости от типа
+        if not message:
+            return
+            
+        # Проверяем наличие соответствующего типа медиа
+        if media_type == "voice" and not message.voice:
+            return
+        elif media_type == "document" and not message.document:
+            return
+        elif media_type == "audio" and not message.audio:
             return
             
         chat_id = message.chat.id
@@ -1397,8 +1422,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
         tts_enabled = chat_settings.get("tts_enabled", False)
         enabled_languages = chat_settings.get("enabled_languages", ["ru", "en"])
         
-        # Проверка длительности голосового сообщения
-        voice_duration = message.voice.duration if message.voice and hasattr(message.voice, 'duration') else 0
+        # Проверка длительности аудиосообщения в зависимости от типа
+        voice_duration = 0
+        if media_type == "voice" and message.voice and hasattr(message.voice, 'duration'):
+            voice_duration = message.voice.duration
+        elif media_type == "audio" and message.audio and hasattr(message.audio, 'duration'):
+            voice_duration = message.audio.duration
+        elif media_type == "document":
+            # Для документов у нас нет длительности напрямую, устанавливаем значение по умолчанию
+            # чтобы обработка шла в любом случае
+            voice_duration = 30  # Достаточно для активации функции саммаризации
         
         # Проверка коротких сообщений в режиме саммаризации - просто игнорируем их
         if voice_duration < 30 and mode == MODE_SUMMARIZE:
@@ -1426,13 +1459,36 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
         # Всегда отправляем уведомление о начале обработки голосового сообщения
         processing_msg = await message.reply_text("🔄 Обрабатываю голосовое сообщение...")
         
-        # Скачиваем голосовое сообщение
-        voice = await message.voice.get_file()
+        # Скачиваем аудиофайл в зависимости от его типа
+        file_to_download = None
+        file_extension = '.ogg'  # По умолчанию
+        
+        if media_type == "voice":
+            file_to_download = await message.voice.get_file()
+            file_extension = '.ogg'
+        elif media_type == "document":
+            file_to_download = await message.document.get_file()
+            # Определяем расширение на основе MIME-типа или имени файла
+            if message.document.file_name:
+                _, ext = os.path.splitext(message.document.file_name)
+                if ext:
+                    file_extension = ext
+        elif media_type == "audio":
+            file_to_download = await message.audio.get_file()
+            file_extension = '.mp3'  # Обычно аудиофайлы в телеграм это mp3
+            if message.audio.file_name:
+                _, ext = os.path.splitext(message.audio.file_name)
+                if ext:
+                    file_extension = ext
+        
+        if not file_to_download:
+            await message.reply_text("❌ Не удалось получить аудиофайл. Попробуйте отправить его как голосовое сообщение.")
+            return
         
         # Создаем временный файл для аудио
-        with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_audio:
+        with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as temp_audio:
             # Скачиваем аудио во временный файл
-            await voice.download_to_drive(temp_audio.name)
+            await file_to_download.download_to_drive(temp_audio.name)
             logger.info(f"💾 Сохранено голосовое сообщение: {temp_audio.name}")
             
             try:
