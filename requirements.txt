@@ -1,2 +1,9 @@
-requests==2.31.0
-rich==13.7.0
+python-telegram-bot
+openai
+google-cloud-texttospeech
+python-dotenv
+requests
+rich
+APScheduler==3.11.0
+pytz==2024.2
+openai-whisper

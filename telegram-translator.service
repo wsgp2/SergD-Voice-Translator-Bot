@@ -10,7 +10,7 @@ WorkingDirectory=/home/deploy/telegram_voice_translator
 Environment=PYTHONUNBUFFERED=1
 
 # Активируем виртуальное окружение и запускаем бота
-ExecStart=/bin/bash -c 'source /home/deploy/telegram_voice_translator/venv/bin/activate && python3.11 translator_bot.py'
+ExecStart=/bin/bash -c 'source /home/deploy/telegram_voice_translator/venv/bin/activate && python3.11 translator_bot_server.py'
 
 # Перезапуск при падении
 Restart=always
