@@ -303,14 +303,27 @@ async def transcribe_audio(audio_file_path: str) -> tuple[str, str]:
     """Преобразует аудио в текст используя Whisper API"""
     try:
         logger.info(f"Начинаем транскрибацию файла: {audio_file_path}")
-        with open(audio_file_path, "rb") as audio_file:
-            response = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="verbose_json"
-            )
-            logger.info(f"Получен ответ от Whisper API: {response}")
-            return response.text, 'ru' if 'russian' in response.language.lower() else 'id'
+        response = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=open(audio_file_path, "rb"),
+            response_format="verbose_json"
+        )
+        
+        detected_text = response.text
+        detected_lang = response.language
+        
+        logger.info(f"Транскрибация завершена. Язык: {detected_lang}")
+        return detected_text, detected_lang
+    except openai.RateLimitError as e:
+        # Специальная обработка ошибки превышения квоты или лимита запросов
+        if "insufficient_quota" in str(e) or "exceeded your current quota" in str(e):
+            logger.error(f"❌ Исчерпан лимит API OpenAI: {str(e)}", exc_info=True)
+            # Передаем ошибку дальше, но с особым флагом в сообщении
+            raise openai.RateLimitError(f"QUOTA_EXCEEDED: {str(e)}")
+        else:
+            # Обычная ошибка превышения скорости запросов
+            logger.error(f"❌ Превышен лимит запросов API OpenAI: {str(e)}", exc_info=True)
+            raise
     except Exception as e:
         logger.error(f"Ошибка при транскрибации: {str(e)}", exc_info=True)
         raise
@@ -1493,8 +1506,26 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
             
             try:
                 # Распознаем речь и определяем язык через Whisper API
-                detected_text, detected_lang = await transcribe_audio(temp_audio.name)
-                logger.info(f"🎯 Распознан текст: {detected_text}, язык: {detected_lang}")
+                try:
+                    detected_text, detected_lang = await transcribe_audio(temp_audio.name)
+                    logger.info(f"🎯 Распознан текст: {detected_text}, язык: {detected_lang}")
+                except openai.RateLimitError as e:
+                    # Проверяем особый флаг в сообщении об ошибке для ограничения квоты
+                    if "QUOTA_EXCEEDED" in str(e):
+                        await processing_msg.edit_text(
+                            "⚠️ <b>Превышен лимит использования API OpenAI</b>\n\n"
+                            "Пожалуйста, обратитесь к владельцу бота для пополнения счета API.", 
+                            parse_mode="HTML"
+                        )
+                        return
+                    else:
+                        # Другие ошибки RateLimit - временное ограничение
+                        await processing_msg.edit_text(
+                            "⚠️ <b>Слишком много запросов</b>\n\n"
+                            "Пожалуйста, попробуйте еще раз через несколько минут.", 
+                            parse_mode="HTML"
+                        )
+                        return
                 
                 # Проверяем, поддерживается ли исходный язык в настройках чата
                 if detected_lang not in enabled_languages:
