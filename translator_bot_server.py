@@ -2,6 +2,92 @@ import os
 import logging
 import asyncio
 import shutil
+import sys
+from types import ModuleType
+
+"""
+Монки-патч для решения проблемы с библиотекой python-telegram-bot версии 22+
+Проблема: не хватает функций de_json_optional, de_list_optional, parse_sequence_arg
+в модуле telegram._utils.argumentparsing
+"""
+
+# Создаем фейковые функции, которых не хватает
+def de_json_optional(data, cls=None, bot=None):
+    """Monkey patch для de_json_optional
+    
+    Args:
+        data: JSON данные
+        cls: Класс для десериализации
+        bot: Экземпляр бота
+    """
+    if data is None:
+        return None
+    if cls is None:
+        return data
+    return cls.de_json(data, bot)
+
+def de_list_optional(data, cls, bot=None):
+    """Monkey patch для de_list_optional"""
+    if data is None:
+        return None
+    return [cls.de_json(d, bot) for d in data]
+
+def parse_sequence_arg(arg):
+    """Monkey patch для parse_sequence_arg"""
+    if arg is None:
+        return ()
+    if isinstance(arg, (list, tuple, set)):
+        return tuple(arg)
+    return (arg,)
+
+def de_json_decrypted_optional(data, cls=None, bot=None):
+    """Monkey patch для de_json_decrypted_optional"""
+    if data is None:
+        return None
+    if cls is None:
+        return data
+    return cls.de_json_decrypted(data, bot)
+
+def de_list_decrypted_optional(data, cls, bot=None):
+    """Monkey patch для de_list_decrypted_optional"""
+    if data is None:
+        return None
+    return [cls.de_json_decrypted(d, bot) for d in data]
+    
+def none_or(value, default):
+    """Monkey patch для none_or"""
+    return default if value is None else value
+
+def parse_lpo_and_dwpp(limit=None, parse_order=None, disable_web_page_preview=None, link_preview_options=None):
+    """Monkey patch для parse_lpo_and_dwpp"""
+    # Совместимость с устаревшим и новым API
+    result = {}
+    if disable_web_page_preview is not None or link_preview_options is not None:
+        result['link_preview_options'] = link_preview_options or {'is_disabled': bool(disable_web_page_preview)}
+
+    if limit is not None:
+        result['limit'] = limit
+
+    if parse_order is not None:
+        result['parse_order'] = bool(parse_order)
+        
+    return result
+
+# Создаем фейковый модуль с нужными функциями
+module = ModuleType('telegram._utils.argumentparsing')
+module.de_json_optional = de_json_optional
+module.de_list_optional = de_list_optional
+module.parse_sequence_arg = parse_sequence_arg
+module.de_json_decrypted_optional = de_json_decrypted_optional
+module.de_list_decrypted_optional = de_list_decrypted_optional
+module.none_or = none_or
+module.parse_lpo_and_dwpp = parse_lpo_and_dwpp
+
+# Добавляем фейковый модуль в sys.modules
+# Это сделает его доступным при импорте
+sys.modules['telegram._utils.argumentparsing'] = module
+print("🔧 Монки-патч для python-telegram-bot установлен")
+
 import telegram
 import openai
 import os
@@ -58,10 +144,28 @@ MODE_SUMMARIZE = "summarize"    # Только саммаризация
 MODE_BOTH = "both"              # И перевод, и саммаризация
 
 LANG_EMOJIS = {
-    'ru': '🇷🇺',
-    'id': '🇮🇩',
-    'en': '🇺🇸'
+    "ru": "🇷🇺",
+    "en": "🇬🇧",
+    "id": "🇮🇩",
+    "russian": "🇷🇺",
+    "english": "🇬🇧",
+    "indonesian": "🇮🇩",
 }
+
+LANG_NORMALIZE = {
+    "ru": "ru",
+    "en": "en",
+    "id": "id",
+    "russian": "ru",
+    "english": "en",
+    "indonesian": "id",
+}
+
+def normalize_lang_code(lang_code):
+    """Нормализует код языка к стандартному формату (ru, en, id)"""
+    if lang_code in LANG_NORMALIZE:
+        return LANG_NORMALIZE[lang_code]
+    return lang_code
 
 VOICES = {
     'ru': 'shimmer',  # женский голос 👩
@@ -326,18 +430,41 @@ def normalize_text_spacing(text: str) -> str:
     
     return text.strip()
 
+def detect_language(text: str) -> str:
+    """Определяет язык текста по символам (быстрая эвристика без API)"""
+    if not text:
+        return 'en'
+    # Считаем символы разных алфавитов
+    cyrillic = sum(1 for c in text if 'Ѐ' <= c <= 'ӿ')
+    latin = sum(1 for c in text if 'a' <= c.lower() <= 'z')
+    total = len(text.replace(' ', ''))
+    if total == 0:
+        return 'en'
+    # Если > 30% кириллица — русский
+    if cyrillic / total > 0.3:
+        return 'russian'
+    # Индонезийский vs английский — проверяем характерные слова
+    indo_markers = ['yang', 'dan', 'untuk', 'dengan', 'dari', 'ini', 'itu', 'ada', 'tidak', 'akan', 'bisa', 'kami', 'saya', 'sudah', 'juga', 'atau']
+    lower_text = text.lower()
+    indo_score = sum(1 for w in indo_markers if f' {w} ' in f' {lower_text} ')
+    if indo_score >= 2:
+        return 'indonesian'
+    return 'english'
+
 async def transcribe_audio(audio_file_path: str) -> tuple[str, str]:
-    """Преобразует аудио в текст используя Whisper API"""
+    """Преобразует аудио в текст используя gpt-4o-transcribe + определение языка"""
     try:
         logger.info(f"Начинаем транскрибацию файла: {audio_file_path}")
-        response = openai_client.audio.transcriptions.create(
-            model="whisper-1",
-            file=open(audio_file_path, "rb"),
-            response_format="verbose_json"
-        )
+        with open(audio_file_path, "rb") as f:
+            response = openai_client.audio.transcriptions.create(
+                model="gpt-4o-transcribe",
+                file=f,
+            )
         
         detected_text = response.text
-        detected_lang = response.language
+        
+        # gpt-4o-transcribe не возвращает язык — определяем из текста
+        detected_lang = detect_language(detected_text)
         
         logger.info(f"Транскрибация завершена. Язык: {detected_lang}")
         return detected_text, detected_lang
@@ -360,7 +487,7 @@ async def transcribe_audio(audio_file_path: str) -> tuple[str, str]:
 
 async def translate_with_gpt(text: str, source_lang: str, target_languages: list = None) -> dict:
     """Переводит текст используя ChatGPT с учетом целевых языков"""
-    translations = {source_lang: clean_text(text)}
+    translations = {}  # Не добавляем исходный текст в словарь переводов
     
     # Если целевые языки не указаны, используем все поддерживаемые
     if target_languages is None:
@@ -414,7 +541,7 @@ async def translate_with_gpt(text: str, source_lang: str, target_languages: list
         user_prompt = f"Translate this text with attention to context and cultural nuances: {text}"
 
         response = openai_client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -493,7 +620,7 @@ async def summarize_with_gpt(text: str, lang: str) -> str:
         user_prompt = f"Создай детальное резюме следующего текста, сохранив все ключевые мысли и идеи: {text}"
         
         response = openai_client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -738,11 +865,21 @@ def get_parse_mode_for_mode(mode: str):
 
 async def safe_send_message(message_obj, text: str, parse_mode: str = None, mode: str = MODE_TRANSLATE):
     """Безопасно отправляет сообщение, разбивая его на части при необходимости"""
+    # Проверка на None для предотвращения AttributeError
+    if message_obj is None:
+        logger.error(f"Ошибка: message_obj равен None. Невозможно отправить сообщение: {text[:50]}...")
+        return None
+        
     try:
         # Если parse_mode не указан явно, определяем его на основе режима
         if parse_mode is None:
-            # Теперь это обычная функция, не корутина, поэтому await не нужен
-            parse_mode = get_parse_mode_for_mode(mode)
+            # Проверяем наличие HTML-тегов в тексте
+            if any(tag in text for tag in ['<b>', '<i>', '<code>', '<pre>', '<a href=']):
+                parse_mode = 'HTML'
+            else:
+                parse_mode = get_parse_mode_for_mode(mode)
+        
+        logger.debug(f"Отправка сообщения с parse_mode: {parse_mode}")
             
         if len(text) <= 4096:
             return await message_obj.reply_text(text, parse_mode=parse_mode)
@@ -794,7 +931,7 @@ async def generate_audio(text: str, lang: str) -> bytes:
             raise ValueError(f"Unsupported language for TTS: {lang}")
             
         response = openai_client.audio.speech.create(
-            model="tts-1",
+            model="tts-1-hd",
             voice=VOICES[lang],
             input=text
         )
@@ -806,7 +943,12 @@ async def generate_audio(text: str, lang: str) -> bytes:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
-    await update.message.reply_text(
+    message_obj = get_effective_message(update)
+    if message_obj is None:
+        logger.error("None message_obj в start")
+        return
+        
+    await message_obj.reply_text(
         'Привет! Я бот для перевода голосовых сообщений.\n\n'
         'Я автоматически определяю язык (русский или индонезийский) и перевожу:\n'
         'Русский → Индонезийский\n'
@@ -814,6 +956,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ' + добавляю перевод на английский\n\n'
         'Просто отправь мне голосовое сообщение!'
     )
+
+def get_effective_message(update: Update):
+    """Определяет актуальный объект сообщения (обычное или бизнес)"""
+    if hasattr(update, 'message') and update.message is not None:
+        return update.message
+    elif hasattr(update, 'business_message') and update.business_message is not None:
+        return update.business_message
+    elif hasattr(update, 'effective_message') and update.effective_message is not None:
+        return update.effective_message
+    else:
+        logger.error("Не удалось получить объект сообщения из update")
+        return None
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
@@ -826,15 +980,25 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '• Саммаризация длинных сообщений (>30 сек)\n'
         '• Поддержка русского, английского и индонезийского языков\n'
         '• Быстрые команды для переключения режимов\n\n'
-        'Для подробной информации отправьте команду /help\n'
-        'Для настройки бота используйте /settings'
+        'Для подробной информации отправьте команду /help или >help \n'
+        'Для настройки бота используйте /settings или >settings'
     )
     
-    # Используем безопасную отправку сообщения
-    await safe_send_message(update.message, start_text)
+    # Получаем актуальный объект сообщения и используем безопасную отправку
+    message_obj = get_effective_message(update)
+    await safe_send_message(message_obj, start_text)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
+    # Получаем актуальный объект сообщения
+    message_obj = get_effective_message(update)
+    
+    # Определяем тип чата для показа соответствующих команд
+    chat_type = 'unknown'
+    if message_obj and hasattr(message_obj, 'chat'):
+        chat_type = message_obj.chat.type
+    
+    # Базовый текст справки
     help_text = (
         'Как использовать бота:\n\n'
         '1. Отправьте голосовое сообщение\n'
@@ -858,24 +1022,46 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '/tts on/off - традиционное управление аудио\n'
         '/balance - проверить баланс OpenAI API (только для владельца)\n\n'
         'Обработка голосовых сообщений:\n'
-        '- Короткие (<30 сек): только перевод в режиме "summarize"\n'
-        '- Длинные (>30 сек): автоматически добавляется саммаризация\n\n'
+        '- Короткие (менее 30 сек): только перевод в режиме "summarize"\n'
+        '- Длинные (более 30 сек): автоматически добавляется саммаризация\n\n'
         'Настройки:\n'
         '/settings - все настройки бота для текущего чата\n'
         '/languages - настройка языков перевода\n'
         '/tts - включение/выключение озвучки'
     )
     
-    # Используем безопасную отправку сообщения
-    await safe_send_message(update.message, help_text)
+    # Добавляем информацию о командах с префиксом ">" для приватных чатов
+    if chat_type == ChatType.PRIVATE:
+        alternative_help = (
+            '\n\n<b>Специальные команды для приватных чатов:</b>\n'
+            'В приватных чатах можно использовать команды с префиксом ">" вместо "/"\n\n'
+            '<b>Сокращённые команды языков:</b>\n'
+            '>ru_en - Русский и Английский\n'
+            '>ru_id - Русский и Индонезийский\n'
+            '>en_id - Английский и Индонезийский\n\n'
+            '<b>Сокращённые команды режимов:</b>\n'
+            '>translate - только перевод\n'
+            '>summarize - только саммаризация\n'
+            '>both - и перевод, и саммаризация\n\n'
+            'Также работают все обычные команды с префиксом ">":\n'
+            '>help, >settings, >languages, >tts и т.д.'
+        )
+        help_text += alternative_help
+    
+    await safe_send_message(message_obj, help_text)
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /settings для настройки бота в чате"""
+    message_obj = get_effective_message(update)
+    if message_obj is None:
+        logger.error("None message_obj в settings_command")
+        return
+        
     user = update.effective_user
     chat = update.effective_chat
     
     if not chat:
-        await update.message.reply_text("❌ Эта команда может использоваться только в групповых чатах.")
+        await safe_send_message(message_obj, "❌ Эта команда может использоваться только в групповых чатах.")
         return
     
     # Проверяем права администратора для пользователя в чате
@@ -938,10 +1124,8 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"- Генерация аудио: {'✅ Включена' if chat_settings['tts_enabled'] else '❌ Выключена'}"
     )
     
-    # Определяем объект сообщения для ответа (может быть бизнес-сообщение или обычное)
-    message_obj = update.message
-    if not message_obj and hasattr(update, 'business_message') and update.business_message:
-        message_obj = update.business_message
+    # Получаем актуальный объект сообщения для ответа
+    message_obj = get_effective_message(update)
     
     if not message_obj:
         logger.error("Не удалось найти объект сообщения для ответа")
@@ -955,12 +1139,9 @@ async def settings_langs_command(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     chat = update.effective_chat
     
-    # Определяем объект сообщения для ответа (может быть бизнес-сообщение или обычное)
-    message_obj = update.message
-    if not message_obj and hasattr(update, 'business_message') and update.business_message:
-        message_obj = update.business_message
-    
-    if not message_obj:
+    # Получаем объект сообщения с помощью нашей безопасной функции
+    message_obj = get_effective_message(update)
+    if message_obj is None:
         logger.error("Не удалось найти объект сообщения для ответа в settings_langs_command")
         return
         
@@ -1104,6 +1285,12 @@ async def tts_off_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def settings_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /settings_mode для настройки режима работы бота"""
+    # Получаем объект сообщения
+    message_obj = get_effective_message(update)
+    if message_obj is None:
+        logger.error("None message_obj в settings_mode_command")
+        return
+        
     user = update.effective_user
     chat = update.effective_chat
     
@@ -1129,7 +1316,7 @@ async def settings_mode_command(update: Update, context: ContextTypes.DEFAULT_TY
         is_owner = True
     
     if not (is_admin or is_owner):
-        await update.message.reply_text("❌ У вас нет прав для изменения настроек бота в этом чате.")
+        await message_obj.reply_text("❌ У вас нет прав для изменения настроек бота в этом чате.")
         return
     
     # Получаем текущие настройки
@@ -1143,7 +1330,7 @@ async def settings_mode_command(update: Update, context: ContextTypes.DEFAULT_TY
     args = context.args
     
     if not args:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "❓ Выберите режим работы бота:\n\n"
             "Доступные режимы:\n"
             "- `translate` - только перевод\n"
@@ -1163,7 +1350,7 @@ async def settings_mode_command(update: Update, context: ContextTypes.DEFAULT_TY
     mode = args[0].lower()
     
     if mode not in [MODE_TRANSLATE, MODE_SUMMARIZE, MODE_BOTH]:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "❌ Некорректный режим. Доступные режимы:\n"
             "- `translate` - только перевод\n"
             "- `summarize` - только саммаризация\n"
@@ -1181,13 +1368,19 @@ async def settings_mode_command(update: Update, context: ContextTypes.DEFAULT_TY
         MODE_BOTH: "перевод и саммаризация"
     }
     
-    await update.message.reply_text(
+    await message_obj.reply_text(
         f"✅ Режим работы бота успешно обновлен!\n"
         f"Новый режим: {mode_name.get(mode, mode)}"
     )
 
 async def settings_tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /settings_tts для включения/выключения генерации аудио"""
+    # Получаем объект сообщения
+    message_obj = get_effective_message(update)
+    if message_obj is None:
+        logger.error("None message_obj в settings_tts_command")
+        return
+        
     user = update.effective_user
     chat = update.effective_chat
     
@@ -1213,7 +1406,7 @@ async def settings_tts_command(update: Update, context: ContextTypes.DEFAULT_TYP
         is_owner = True
     
     if not (is_admin or is_owner):
-        await update.message.reply_text("❌ У вас нет прав для изменения настроек бота в этом чате.")
+        await message_obj.reply_text("❌ У вас нет прав для изменения настроек бота в этом чате.")
         return
     
     # Получаем текущие настройки
@@ -1227,7 +1420,7 @@ async def settings_tts_command(update: Update, context: ContextTypes.DEFAULT_TYP
     args = context.args
     
     if not args or args[0].lower() not in ["on", "off"]:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "❓ Пожалуйста, укажите 'on' для включения или 'off' для выключения генерации аудио.\n"
             "Пример: `/settings_tts on`"
         )
@@ -1239,7 +1432,7 @@ async def settings_tts_command(update: Update, context: ContextTypes.DEFAULT_TYP
     settings[chat_id_str]["tts_enabled"] = tts_enabled
     save_chat_settings(settings)
     
-    await update.message.reply_text(
+    await message_obj.reply_text(
         f"✅ Настройки генерации аудио обновлены!\n"
         f"Генерация аудио: {'✅ Включена' if tts_enabled else '❌ Выключена'}"
     )
@@ -1322,19 +1515,25 @@ async def check_openai_balance() -> dict:
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет информацию о балансе OpenAI API (только для владельца)."""
+    # Получаем объект сообщения
+    message_obj = get_effective_message(update)
+    if message_obj is None:
+        logger.error("None message_obj в balance_command")
+        return
+        
     # Проверяем, что это запрос от владельца бота
     if not await is_owner(update, context):
-        await update.message.reply_text("❌ Эта команда доступна только владельцу бота.")
+        await message_obj.reply_text("❌ Эта команда доступна только владельцу бота.")
         return
     
     # Отправляем сообщение о начале проверки
-    message = await update.message.reply_text("🔄 Проверяю баланс OpenAI API...")
+    processing_msg = await message_obj.reply_text("🔄 Проверяю баланс OpenAI API...")
     
     # Получаем информацию о балансе
     balance_info = await check_openai_balance()
     
     if not balance_info["success"]:
-        await message.edit_text(f"❌ Ошибка при проверке баланса: {balance_info['error']}")
+        await processing_msg.edit_text(f"❌ Ошибка при проверке баланса: {balance_info['error']}")
         return
     
     # Формируем текст сообщения
@@ -1368,6 +1567,12 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /stats для получения статистики использования бота"""
+    # Получаем объект сообщения
+    message_obj = get_effective_message(update)
+    if message_obj is None:
+        logger.error("None message_obj в stats_command")
+        return
+        
     user = update.effective_user
     
     # Только владелец бота может получать статистику
@@ -1379,16 +1584,16 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_owner = True
     
     if not is_owner:
-        await update.message.reply_text("❌ Эта команда доступна только владельцу бота.")
+        await message_obj.reply_text("❌ Эта команда доступна только владельцу бота.")
         return
     
     # Загружаем статистику
     stats = load_usage_stats()
     
     # Формируем сообщение со статистикой
-    message = generate_stats_message(stats)
+    stats_message = generate_stats_message(stats)
     
-    await update.message.reply_text(message, parse_mode='Markdown')
+    await message_obj.reply_text(stats_message, parse_mode='Markdown')
 
 def generate_stats_message(stats):
     """Генерирует сообщение со статистикой использования бота"""
@@ -1479,7 +1684,12 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
     if not message_text.startswith(">"):
         return False
     
-    message = update.business_message if is_business else update.message
+    # Используем нашу функцию для получения объекта сообщения
+    message = get_effective_message(update)
+    if message is None:
+        logger.error("Не удалось получить объект сообщения в handle_alternative_commands")
+        return False
+        
     chat_type = message.chat.type if hasattr(message, 'chat') else 'unknown'
     
     # Извлекаем команду без префикса ">" и любые аргументы
@@ -1494,6 +1704,7 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
     
     # Словарь соответствия альтернативных команд стандартным обработчикам
     command_handlers = {
+        # Стандартные команды
         "start": start_command,
         "help": help_command,
         "settings": settings_command,
@@ -1512,7 +1723,18 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
         "tts": settings_tts_command,
         "tts_on": tts_on_command,
         "tts_off": tts_off_command,
-        "stats": stats_command
+        "stats": stats_command,
+        
+        # Добавляем сокращенные версии команд для удобства
+        "ru_en": settings_langs_ru_en_command,
+        "ru_id": settings_langs_ru_id_command,
+        "en_id": settings_langs_en_id_command,
+        "translate": settings_mode_translate_command,
+        "summarize": settings_mode_summarize_command,
+        "both": settings_mode_both_command,
+        "perevod": settings_mode_perevod_command,
+        "sammarajz": settings_mode_sammarajz_command,
+        "bof": settings_mode_bof_command
     }
     
     # Проверяем, есть ли такая команда в словаре
@@ -1523,7 +1745,14 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
             return True
         except Exception as e:
             logger.error(f"❌ Ошибка при обработке альтернативной команды '{command}': {str(e)}", exc_info=True)
-            await message.reply_text(f"😔 Произошла ошибка при выполнении команды '{command}'")
+            
+            # Безопасная отправка ошибки с проверкой на None
+            error_text = f"😔 Произошла ошибка при выполнении команды '{command}'"
+            if message is not None:
+                try:
+                    await message.reply_text(error_text)
+                except Exception as reply_error:
+                    logger.error(f"Не удалось отправить сообщение об ошибке: {str(reply_error)}", exc_info=True)
             return True
     
     return False
@@ -2004,10 +2233,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                         except Exception as edit_error:
                             logger.error(f"Ошибка при обновлении сообщения: {edit_error}", exc_info=True)
                             # Если не удалось обновить, пробуем ответить на исходное сообщение
-                            await message.reply_text(result_message.strip(), parse_mode='Markdown')
+                            await message.reply_text(result_message.strip(), parse_mode='HTML')
                     else:
                         # Если нет сообщения об обработке, отвечаем на исходное
-                        await message.reply_text(result_message.strip(), parse_mode='Markdown')
+                        await message.reply_text(result_message.strip(), parse_mode='HTML')
                 else:
                     # Для чужих сообщений - стандартная обработка
                     if is_chat_owner and processing_msg is not None:
@@ -2036,7 +2265,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                     elif processing_msg is None:
                         # Если нет сообщения об обработке (для собственных сообщений), просто отправляем ответ
                         try:
-                            await message.reply_text(result_message.strip(), parse_mode='Markdown')
+                            await message.reply_text(result_message.strip(), parse_mode='HTML')
                         except Exception as e:
                             logger.warning(f"Не удалось отправить сообщение: {e}")
                             # Используем функцию разделения для длинных сообщений
@@ -2056,7 +2285,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
                             
                             # Отправляем сообщение с учетом возможной большой длины
                             try:
-                                await message.reply_text(result_message.strip(), parse_mode='Markdown')
+                                await message.reply_text(result_message.strip(), parse_mode='HTML')
                                 message_sent = True
                             except Exception as e:
                                 logger.warning(f"Не удалось отправить сообщение сразу: {e}")
@@ -2119,10 +2348,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
         try:
             # Пытаемся отправить ответ через правильный объект сообщения
             error_message = "😔 Извините, произошла ошибка при обработке сообщения."
-            if is_business and hasattr(update, 'business_message') and update.business_message:
-                await update.business_message.reply_text(error_message)
-            elif hasattr(update, 'message') and update.message:
-                await update.message.reply_text(error_message)
+            message_obj = get_effective_message(update)
+            if message_obj is not None:
+                await message_obj.reply_text(error_message)
+            else:
+                logger.error("Не удалось получить объект сообщения для отправки ошибки")
         except Exception as inner_e:
             logger.error(f"❌ Ошибка при отправке сообщения об ошибке: {str(inner_e)}", exc_info=True)
 
