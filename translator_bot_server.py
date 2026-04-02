@@ -168,9 +168,16 @@ def normalize_lang_code(lang_code):
     return lang_code
 
 VOICES = {
-    'ru': 'shimmer',  # женский голос 👩
-    'id': 'nova',     # женский голос 👩
-    'en': 'echo'      # мужской голос 👨
+    'ru': 'onyx',
+    'id': 'onyx',
+    'en': 'onyx'
+}
+
+# Инструкции для gpt-4o-mini-tts по языкам
+TTS_INSTRUCTIONS = {
+    'ru': 'Speak clearly in Russian with native pronunciation.',
+    'id': 'Speak clearly in Indonesian (Bahasa Indonesia) with native pronunciation.',
+    'en': 'Speak clearly in English with native pronunciation.',
 }
 
 # Структура настроек по умолчанию для нового чата
@@ -463,8 +470,8 @@ async def transcribe_audio(audio_file_path: str) -> tuple[str, str]:
         
         detected_text = response.text
         
-        # gpt-4o-transcribe не возвращает язык — определяем из текста
-        detected_lang = detect_language(detected_text)
+        # gpt-4o-transcribe не возвращает язык — определяем из текста и нормализуем
+        detected_lang = normalize_lang_code(detect_language(detected_text))
         
         logger.info(f"Транскрибация завершена. Язык: {detected_lang}")
         return detected_text, detected_lang
@@ -900,45 +907,23 @@ async def safe_send_message(message_obj, text: str, parse_mode: str = None, mode
             return None
 
 async def generate_audio(text: str, lang: str) -> bytes:
-    """Генерирует аудио из текста используя OpenAI TTS или Google TTS для индонезийского языка"""
+    """Генерирует аудио используя gpt-4o-mini-tts с языковыми инструкциями"""
     try:
-        logger.info(f"🔊 Генерируем аудио для текста: {text} на языке {lang}")
-        
-        # Для индонезийского языка используем Google Cloud TTS
-        if lang == 'id':
-            input_text = texttospeech.SynthesisInput(text=text)
-            
-            voice = texttospeech.VoiceSelectionParams(
-                language_code='id-ID',
-                name='id-ID-Standard-A'
-            )
-            
-            audio_config = texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.MP3
-            )
-            
-            response = google_client.synthesize_speech(
-                input=input_text,
-                voice=voice,
-                audio_config=audio_config
-            )
-            
-            return response.audio_content
-            
-        # Для остальных языков используем OpenAI TTS как раньше
-        if lang not in VOICES:
-            logger.error(f"❌ Неподдерживаемый язык для TTS: {lang}")
-            raise ValueError(f"Unsupported language for TTS: {lang}")
-            
+        voice = VOICES.get(lang, 'onyx')
+        instructions = TTS_INSTRUCTIONS.get(lang, 'Speak clearly in the language of the text.')
+
+        logger.info(f"TTS [{lang}] voice={voice}: {text[:80]}")
+
         response = openai_client.audio.speech.create(
-            model="tts-1-hd",
-            voice=VOICES[lang],
-            input=text
+            model="gpt-4o-mini-tts",
+            voice=voice,
+            input=text,
+            instructions=instructions
         )
         return response.content
-        
+
     except Exception as e:
-        logger.error(f"❌ Ошибка при генерации аудио: {str(e)}", exc_info=True)
+        logger.error(f"Ошибка генерации аудио: {e}", exc_info=True)
         raise
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1758,603 +1743,304 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
     return False
 
 async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Универсальный обработчик для всех типов сообщений"""
-    # Проверяем наличие бизнес-сообщения
+    """Универсальный обработчик для всех типов сообщений (обычных и бизнес)"""
+    # Определяем сообщение и тип
     if hasattr(update, 'business_message') and update.business_message:
         message = update.business_message
         is_business = True
-        chat_type = message.chat.type if hasattr(message, 'chat') else "unknown"
-        
-        # Проверяем текстовые сообщения для альтернативных команд в приватных чатах
-        if hasattr(message, 'text') and message.text and chat_type == ChatType.PRIVATE:
-            if await handle_alternative_commands(update, context, message.text, is_business=True):
-                return
-        
-        # Обрабатываем голосовые сообщения
-        if message.voice:
-            logger.info(f"🎯 Получено бизнес-голосовое сообщение. Тип чата: {chat_type}")
-            await handle_voice(update, context, is_business=True, media_type="voice")
-        # Обрабатываем аудиофайлы, отправленные как документы
-        elif message.document and message.document.mime_type and message.document.mime_type.startswith('audio/'):
-            logger.info(f"🎵 Получен аудио-документ (бизнес). Тип чата: {chat_type}, MIME: {message.document.mime_type}")
-            await handle_voice(update, context, is_business=True, media_type="document")
-        # Обрабатываем аудиофайлы, отправленные с метаданными (music)
-        elif message.audio:
-            logger.info(f"🎵 Получен аудиофайл с метаданными (бизнес). Тип чата: {chat_type}")
-            await handle_voice(update, context, is_business=True, media_type="audio")
-    
-    # Проверяем наличие обычного сообщения
     elif hasattr(update, 'message') and update.message:
         message = update.message
-        chat_type = message.chat.type if hasattr(message, 'chat') else "unknown"
-        
-        # Проверяем текстовые сообщения для альтернативных команд в приватных чатах
-        if hasattr(message, 'text') and message.text and chat_type == ChatType.PRIVATE:
-            if await handle_alternative_commands(update, context, message.text, is_business=False):
-                return
-        
-        # Обрабатываем голосовые сообщения
-        if message.voice:
-            logger.info(f"Получено обычное голосовое сообщение. Тип чата: {chat_type}")
-            await handle_voice(update, context, is_business=False, media_type="voice")
-        # Обрабатываем аудиофайлы, отправленные как документы
-        elif message.document and message.document.mime_type and message.document.mime_type.startswith('audio/'):
-            logger.info(f"🎵 Получен аудио-документ. Тип чата: {chat_type}, MIME: {message.document.mime_type}")
-            await handle_voice(update, context, is_business=False, media_type="document")
-        # Обрабатываем аудиофайлы, отправленные с метаданными (music)
-        elif message.audio:
-            logger.info(f"🎵 Получен аудиофайл с метаданными. Тип чата: {chat_type}")
-            await handle_voice(update, context, is_business=False, media_type="audio")
+        is_business = False
+    else:
+        return
+
+    chat_type = message.chat.type if hasattr(message, 'chat') else "unknown"
+
+    # Альтернативные команды в приватных чатах (>help, >settings и т.д.)
+    if hasattr(message, 'text') and message.text and chat_type == ChatType.PRIVATE:
+        if await handle_alternative_commands(update, context, message.text, is_business=is_business):
+            return
+
+    # Определяем тип медиа
+    media_type = None
+    if message.voice:
+        media_type = "voice"
+    elif message.video_note:
+        media_type = "video_note"
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith('audio/'):
+        media_type = "document"
+    elif message.audio:
+        media_type = "audio"
+
+    if media_type:
+        biz_tag = " (бизнес)" if is_business else ""
+        logger.info(f"Получено {media_type} сообщение{biz_tag}. Тип чата: {chat_type}")
+        await handle_voice(update, context, is_business=is_business, media_type=media_type)
+    elif hasattr(message, 'text') and message.text and not message.text.startswith(('/', '>')):
+        # Автоперевод текстовых сообщений (если язык отличается от настроенных)
+        await handle_text_translation(message, context)
+
+def _get_voice_duration(message, media_type: str) -> int:
+    """Извлекает длительность аудио из сообщения"""
+    if media_type == "voice" and message.voice and hasattr(message.voice, 'duration'):
+        return message.voice.duration
+    if media_type == "audio" and message.audio and hasattr(message.audio, 'duration'):
+        return message.audio.duration
+    if media_type == "video_note" and message.video_note and hasattr(message.video_note, 'duration'):
+        return message.video_note.duration
+    if media_type == "document":
+        return 30
+    return 0
+
+
+def _adjust_mode_by_duration(mode: str, voice_duration: int) -> str:
+    """Корректирует режим работы в зависимости от длительности аудио"""
+    if voice_duration > 30 and mode == MODE_TRANSLATE:
+        logger.info(f"Длинное сообщение ({voice_duration}с): добавлена саммаризация")
+        return MODE_BOTH
+    return mode
+
+
+async def _download_audio_file(message, media_type: str) -> tuple:
+    """Скачивает аудиофайл из сообщения. Возвращает (file_path, extension) или (None, None)"""
+    file_to_download = None
+    file_extension = '.ogg'
+
+    if media_type == "voice":
+        file_to_download = await message.voice.get_file()
+        file_extension = '.ogg'
+    elif media_type == "document":
+        file_to_download = await message.document.get_file()
+        if message.document.file_name:
+            _, ext = os.path.splitext(message.document.file_name)
+            if ext:
+                file_extension = ext
+    elif media_type == "audio":
+        file_to_download = await message.audio.get_file()
+        file_extension = '.mp3'
+        if message.audio.file_name:
+            _, ext = os.path.splitext(message.audio.file_name)
+            if ext:
+                file_extension = ext
+    elif media_type == "video_note":
+        file_to_download = await message.video_note.get_file()
+        file_extension = '.mp4'
+
+    if not file_to_download:
+        return None, None
+
+    temp_audio = tempfile.NamedTemporaryFile(suffix=file_extension, delete=False)
+    await file_to_download.download_to_drive(temp_audio.name)
+    temp_audio.close()
+    logger.info(f"Сохранено аудио: {temp_audio.name}")
+    return temp_audio.name, file_extension
+
+
+def _format_result_message(result: dict, mode: str, detected_lang: str) -> str:
+    """Форматирует результат обработки в текст для отправки"""
+    parts = []
+
+    if mode == MODE_SUMMARIZE:
+        if result.get("summary"):
+            parts.append(result["summary"])
+
+    elif mode == MODE_TRANSLATE:
+        parts.append(f"🎙️ Исходный текст ({LANG_EMOJIS.get(detected_lang, '')}):\n{result['original']}\n")
+        if result.get("translations"):
+            parts.append("🔄 Переводы:")
+            for lang, text in result["translations"].items():
+                if lang != detected_lang:
+                    parts.append(f"{LANG_EMOJIS.get(lang, '')}: {text}\n")
+
+    elif mode == MODE_BOTH:
+        if result.get("translations"):
+            parts.append("🔄 Переводы:")
+            for lang, text in result["translations"].items():
+                if lang != detected_lang:
+                    parts.append(f"{LANG_EMOJIS.get(lang, '')}: {text}\n")
+        if result.get("summary"):
+            parts.append(result["summary"])
+
+    return "\n".join(parts).strip()
+
+
+async def _send_result(context, message, processing_msg, result_message: str, mode: str):
+    """Отправляет результат: пытается отредактировать processing_msg, иначе шлёт новое"""
+    if not result_message:
+        if processing_msg:
+            try:
+                await processing_msg.delete()
+            except Exception:
+                pass
+        return
+
+    parse_mode = 'HTML' if mode in [MODE_SUMMARIZE, MODE_BOTH] else 'Markdown'
+    chat_id = message.chat.id
+
+    # Для коротких сообщений — пробуем отредактировать "Обрабатываю..."
+    if processing_msg and len(result_message) <= 4000:
+        try:
+            await processing_msg.edit_text(text=result_message, parse_mode=parse_mode)
+            return
+        except Exception as e:
+            logger.debug(f"Не удалось редактировать: {e}")
+
+    # Удаляем "Обрабатываю..." и шлём новое сообщение
+    if processing_msg:
+        try:
+            await processing_msg.delete()
+        except Exception:
+            pass
+
+    await send_split_message(
+        context=context,
+        chat_id=chat_id,
+        message_text=result_message,
+        reply_to_message_id=message.message_id,
+        parse_mode=parse_mode
+    )
+
+
+async def _handle_tts(context, message, result: dict, detected_lang: str, enabled_languages: list):
+    """Генерирует и отправляет озвученный перевод"""
+    target_langs = [lang for lang in enabled_languages if lang != detected_lang]
+    if not target_langs:
+        return
+
+    target_lang = target_langs[0]
+    target_text = result.get("translations", {}).get(target_lang)
+    if not target_text:
+        return
+
+    try:
+        audio_content = await generate_audio(target_text, target_lang)
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_tts:
+            temp_tts.write(audio_content)
+            temp_tts_path = temp_tts.name
+
+        with open(temp_tts_path, 'rb') as f:
+            await message.reply_voice(f)
+        os.unlink(temp_tts_path)
+    except Exception as e:
+        logger.error(f"Ошибка генерации аудио: {e}")
+        await message.reply_text("😔 Ошибка при создании аудио.")
+
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_business: bool = False, media_type: str = "voice"):
-    """Обработка голосовых и аудио сообщений с учетом настроек чата"""
+    """Обработка голосовых и аудио сообщений"""
+    message = update.business_message if is_business else update.message
+    if not message:
+        return
+
+    # Проверяем наличие медиа
+    if media_type == "voice" and not message.voice:
+        return
+    if media_type == "video_note" and not message.video_note:
+        return
+    if media_type == "document" and not message.document:
+        return
+    if media_type == "audio" and not message.audio:
+        return
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else None
+    user_name = message.from_user.full_name if message.from_user else "Unknown"
+    chat_title = message.chat.title if message.chat.title else "Личный чат"
+
+    # Статистика
+    if user_id:
+        update_usage_stats(user_id, user_name, chat_id, chat_title)
+
+    # Настройки чата
+    chat_settings = get_chat_settings(chat_id)
+    mode = chat_settings.get("mode", MODE_TRANSLATE)
+    tts_enabled = chat_settings.get("tts_enabled", False)
+    enabled_languages = chat_settings.get("enabled_languages", ["ru", "en"])
+
+    # Длительность и корректировка режима
+    voice_duration = _get_voice_duration(message, media_type)
+
+    # Короткие сообщения в режиме саммаризации — игнорируем
+    if voice_duration < 30 and mode == MODE_SUMMARIZE:
+        logger.info(f"Короткое голосовое ({voice_duration}с): режим саммаризации, игнорируем")
+        return
+        
+
+    mode = _adjust_mode_by_duration(mode, voice_duration)
+
+    # Уведомление о начале обработки
+    processing_msg = await message.reply_text("🔄 Обрабатываю голосовое сообщение...")
+
+    # Скачиваем аудио
+    audio_path = None
     try:
-        # Определяем объект сообщения в зависимости от типа
-        message = update.business_message if is_business else update.message
-        
-        # Проверяем наличие сообщения и правильного медиа контента в зависимости от типа
-        if not message:
+        audio_path, _ = await _download_audio_file(message, media_type)
+        if not audio_path:
+            await processing_msg.edit_text("❌ Не удалось получить аудиофайл.")
             return
-            
-        # Проверяем наличие соответствующего типа медиа
-        if media_type == "voice" and not message.voice:
+
+        # Транскрибируем
+        detected_text, detected_lang = await transcribe_audio(audio_path)
+
+        # Обработка ошибок транскрипции
+        if detected_text.startswith("QUOTA_EXCEEDED:"):
+            await processing_msg.edit_text(
+                "⚠️ <b>Превышен лимит API OpenAI</b>\n\nОбратитесь к владельцу бота.",
+                parse_mode="HTML"
+            )
             return
-        elif media_type == "document" and not message.document:
+        if detected_text.startswith("RATE_LIMIT:"):
+            await processing_msg.edit_text(
+                "⚠️ <b>Слишком много запросов</b>\n\nПопробуйте через несколько минут.",
+                parse_mode="HTML"
+            )
             return
-        elif media_type == "audio" and not message.audio:
-            return
-            
-        chat_id = message.chat.id
-        user_id = message.from_user.id if message.from_user else None
-        user_name = message.from_user.full_name if message.from_user else "Unknown"
-        is_chat_owner = message.chat.type != ChatType.PRIVATE and message.from_user and message.from_user.id == message.chat.id
-        chat_title = message.chat.title if message.chat.title else "Личный чат"
-        
-        # Обновляем статистику использования
-        if user_id:
-            update_usage_stats(user_id, user_name, chat_id, chat_title)
-        
-        # Получаем настройки для текущего чата
-        chat_settings = get_chat_settings(chat_id)
-        
-        # Определяем режим работы и другие параметры
-        mode = chat_settings.get("mode", MODE_TRANSLATE)
-        tts_enabled = chat_settings.get("tts_enabled", False)
-        enabled_languages = chat_settings.get("enabled_languages", ["ru", "en"])
-        
-        # Проверка длительности аудиосообщения в зависимости от типа
-        voice_duration = 0
-        if media_type == "voice" and message.voice and hasattr(message.voice, 'duration'):
-            voice_duration = message.voice.duration
-        elif media_type == "audio" and message.audio and hasattr(message.audio, 'duration'):
-            voice_duration = message.audio.duration
-        elif media_type == "document":
-            # Для документов у нас нет длительности напрямую, устанавливаем значение по умолчанию
-            # чтобы обработка шла в любом случае
-            voice_duration = 30  # Достаточно для активации функции саммаризации
-        
-        # Проверка коротких сообщений в режиме саммаризации - просто игнорируем их
-        if voice_duration < 30 and mode == MODE_SUMMARIZE:
-            logger.info(f"Короткое голосовое сообщение ({voice_duration} сек): в режиме саммаризации игнорируем короткие сообщения")
-            # Ранний возврат - не отправляем никаких уведомлений и не выполняем запросы к API
-            return
-        
-        # Автоматическая саммаризация для сообщений длиннее 30 секунд
-        if voice_duration > 30:
-            if mode == MODE_TRANSLATE:
-                # Если был активен только режим перевода, включаем режим с переводом и саммаризацией
-                mode = MODE_BOTH
-                logger.info(f"Длинное голосовое сообщение ({voice_duration} сек): автоматически добавлена саммаризация")
-            # Если режим саммаризации (MODE_SUMMARIZE) или оба режима (MODE_BOTH), оставляем без изменений
-        
-        # Проверяем, является ли сообщение собственным
-        is_owner_message = False
-        if user_id:
-            if OWNER_ID and str(user_id) == str(OWNER_ID) or user_id and user_id == context.bot.id:
-                is_owner_message = True
-                
-        # Проверяем, не является ли сообщение пересланным
-        is_forwarded = hasattr(message, 'forward_date') and message.forward_date is not None
-        
-        # Всегда отправляем уведомление о начале обработки голосового сообщения
-        processing_msg = await message.reply_text("🔄 Обрабатываю голосовое сообщение...")
-        
-        # Скачиваем аудиофайл в зависимости от его типа
-        file_to_download = None
-        file_extension = '.ogg'  # По умолчанию
-        
-        if media_type == "voice":
-            file_to_download = await message.voice.get_file()
-            file_extension = '.ogg'
-        elif media_type == "document":
-            file_to_download = await message.document.get_file()
-            # Определяем расширение на основе MIME-типа или имени файла
-            if message.document.file_name:
-                _, ext = os.path.splitext(message.document.file_name)
-                if ext:
-                    file_extension = ext
-        elif media_type == "audio":
-            file_to_download = await message.audio.get_file()
-            file_extension = '.mp3'  # Обычно аудиофайлы в телеграм это mp3
-            if message.audio.file_name:
-                _, ext = os.path.splitext(message.audio.file_name)
-                if ext:
-                    file_extension = ext
-        
-        if not file_to_download:
-            await message.reply_text("❌ Не удалось получить аудиофайл. Попробуйте отправить его как голосовое сообщение.")
-            return
-        
-        # Создаем временный файл для аудио
-        with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as temp_audio:
-            # Скачиваем аудио во временный файл
-            await file_to_download.download_to_drive(temp_audio.name)
-            logger.info(f"💾 Сохранено голосовое сообщение: {temp_audio.name}")
-            
+
+        logger.info(f"Распознан текст: {detected_text[:80]}..., язык: {detected_lang}")
+
+        # Добавляем язык оригинала если его нет в настройках
+        temp_languages = enabled_languages.copy()
+        if detected_lang not in temp_languages:
+            temp_languages.append(detected_lang)
+
+        # Обрабатываем (перевод / саммаризация)
+        result = await process_message_content(
+            detected_text, detected_lang,
+            {"enabled_languages": temp_languages, "mode": mode},
+            voice_duration
+        )
+
+        # Если результат помечен как "игнорировать" (короткое сообщение в режиме саммаризации)
+        if result.get("ignore"):
             try:
-                # Распознаем речь и определяем язык через Whisper API
-                # Распознаем речь и определяем язык через Whisper API
-                detected_text, detected_lang = await transcribe_audio(temp_audio.name)
-                
-                # Проверяем результат на наличие сообщения об ошибке
-                if detected_text.startswith("QUOTA_EXCEEDED:"):
-                    # Ошибка квоты API
-                    await processing_msg.edit_text(
-                        "⚠️ <b>Превышен лимит использования API OpenAI</b>\n\n"
-                        "Пожалуйста, обратитесь к владельцу бота для пополнения счета API.", 
-                        parse_mode="HTML"
-                    )
-                    return
-                elif detected_text.startswith("RATE_LIMIT:"):
-                    # Ошибка лимита запросов
-                    await processing_msg.edit_text(
-                        "⚠️ <b>Слишком много запросов</b>\n\n"
-                        "Пожалуйста, попробуйте еще раз через несколько минут.", 
-                        parse_mode="HTML"
-                    )
-                    return
-                
-                # Если ошибок нет, продолжаем обработку
-                logger.info(f"🎯 Распознан текст: {detected_text}, язык: {detected_lang}")
-                
-                # Проверяем, поддерживается ли исходный язык в настройках чата
-                if detected_lang not in enabled_languages:
-                    logger.info(f"Язык {detected_lang} не включен в настройках чата {chat_id}")
-                    # Добавляем язык в список для этого сообщения
-                    temp_languages = enabled_languages.copy()
-                    temp_languages.append(detected_lang)
-                else:
-                    temp_languages = enabled_languages
-                
-                # Обрабатываем содержимое сообщения в соответствии с настройками
-                result = await process_message_content(detected_text, detected_lang, {
-                    "enabled_languages": temp_languages, 
-                    "mode": mode
-                }, voice_duration)
-                
-                # Создаем сообщение с результатами обработки в зависимости от режима
-                result_message = ""
-                
-                # В режиме саммаризации показываем только результат без исходного текста
-                if mode == MODE_SUMMARIZE:
-                    if "summary" in result and result["summary"]:
-                        result_message = f"{result['summary']}\n\n"
-                # В режиме перевода показываем исходный текст и переводы
-                elif mode == MODE_TRANSLATE:
-                    result_message = f"🎙️ **Исходный текст ({LANG_EMOJIS.get(detected_lang, '')}):**\n{result['original']}\n\n"
-                    
-                    # Добавляем переводы
-                    if "translations" in result and result["translations"]:
-                        result_message += "🔄 **Переводы:**\n"
-                        for lang, translated_text in result["translations"].items():
-                            if lang != detected_lang:
-                                result_message += f"{LANG_EMOJIS.get(lang, '')}: {translated_text}\n\n"
-                # В комбинированном режиме показываем и переводы, и саммаризацию, но без исходного текста
-                elif mode == MODE_BOTH:
-                    # Добавляем переводы
-                    if "translations" in result and result["translations"]:
-                        result_message += "🔄 **Переводы:**\n"
-                        for lang, translated_text in result["translations"].items():
-                            if lang != detected_lang:
-                                result_message += f"{LANG_EMOJIS.get(lang, '')}: {translated_text}\n\n"
-                    
-                    # Добавляем резюме, если есть
-                    if "summary" in result and result["summary"]:
-                        result_message += f"{result['summary']}\n\n"
-                
-                # Проверяем, можно ли модифицировать сообщение
-                # Это возможно, если сообщение от владельца бота и не является пересланным
-                is_owner_message = False
-                if user_id:
-                    if OWNER_ID and str(user_id) == str(OWNER_ID) or user_id and user_id == context.bot.id:
-                        is_owner_message = True
-                        
-                # Проверяем, не является ли сообщение пересланным
-                is_forwarded = hasattr(message, 'forward_date') and message.forward_date is not None
-                
-                # Сохраняем голосовое сообщение во временный файл, если требуется для TTS
-                voice_copy_path = None
-                if tts_enabled:
-                    with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as voice_copy:
-                        shutil.copy2(temp_audio.name, voice_copy.name)
-                        voice_copy_path = voice_copy.name
-                
-                # Больше не удаляем исходное сообщение
-                message_deleted = False
-                
-                # Флаги для отслеживания состояния сообщений
-                message_sent = False
-                message_successfully_updated = False  # Флаг для отслеживания успешного обновления сообщения
-                
-                # Начинаем блок try для обработки отправки результатов
-                try:
-                    # Проверяем флаг ignore - если он установлен, просто удаляем промежуточное сообщение и завершаем обработку
-                    if "ignore" in result and result["ignore"]:
-                        logger.info("Игнорируем короткое сообщение в режиме саммаризации")
-                        if processing_msg:
-                            try:
-                                await safe_delete_message(processing_msg)
-                            except Exception as e:
-                                logger.error(f"Ошибка при удалении сообщения: {e}", exc_info=True)
-                        return
-                    
-                    # Обработка специальных сообщений
-                    if "message" in result:
-                        # Если есть специальное сообщение (например, о коротком сообщении), просто отвечаем текстом
-                        if processing_msg:
-                            try:
-                                # Используем метод context.bot.edit_message_text вместо processing_msg.edit_text для надежности
-                                await context.bot.edit_message_text(
-                                    text=result["message"],
-                                    chat_id=processing_msg.chat_id,
-                                    message_id=processing_msg.message_id,
-                                    parse_mode='Markdown'
-                                )
-                                logger.info(f"Отправлено уведомление: {result['message']}")
-                            except Exception as e:
-                                logger.error(f"Ошибка при обновлении сообщения: {e}", exc_info=True)
-                                # Если не удалось обновить сообщение, пробуем удалить и отправить новое
-                                try:
-                                    await safe_delete_message(processing_msg)
-                                except:
-                                    pass
-                                await message.reply_text(result["message"], parse_mode='Markdown')
-                        else:
-                            await message.reply_text(result["message"], parse_mode='Markdown')
-                        
-                        # Ранний возврат: если это специальное сообщение, прекращаем обработку
-                        # и не отправляем текст сообщения
-                        return
-                    # Проверяем длину итогового сообщения и TTS настройки
-                    elif tts_enabled and "message" not in result:
-                        # Если сообщение слишком длинное, отправляем голосовое без капшена
-                        if len(result_message) > 1024:
-                            sent_msg = await context.bot.send_voice(
-                                chat_id=chat_id,
-                                voice=open(voice_copy_path, 'rb')
-                            )
-                            
-                            # И отдельно отправляем текст разделенным
-                            # Только если мы не обновили сообщение ранее (WhatsApp избавляемся от дублей)
-                            if not message_successfully_updated:
-                                current_parse_mode = 'HTML' if mode in [MODE_SUMMARIZE, MODE_BOTH] else 'Markdown'
-                                await send_split_message(
-                                    context=context,
-                                    chat_id=chat_id,
-                                    message_text=result_message.strip(),
-                                    reply_to_message_id=sent_msg.message_id,
-                                    parse_mode=current_parse_mode
-                                )
-                        else:
-                            # Если текст помещается в капшен, отправляем с ним
-                            sent_msg = await context.bot.send_voice(
-                                chat_id=chat_id,
-                                voice=open(voice_copy_path, 'rb'),
-                                caption=result_message.strip(),
-                                parse_mode='Markdown'
-                            )
-                            # Отмечаем, что мы уже отправили сообщение с переводом в капшене
-                            message_sent = True
-                    # Если не выполнено ни одно из предыдущих условий, просто отправляем текстовый ответ
-                    else:
-                        # Проверяем длину сообщения - для длинных сразу используем разделение
-                        message_length = len(result_message.strip())
-                        
-                        # Для длинных сообщений (>1000 символов) используем разделение без удаления
-                        if message_length > 1000 or 'summary' in result and result['summary']:
-                            logger.info(f"Длинное сообщение ({message_length} символов) или режим саммаризации: используем разделение")
-                            
-                            # Проверяем - если уже есть обновленное сообщение, не удаляем его
-                            if processing_msg and not message_deleted and not disable_message_deletion:
-                                try:
-                                    # Удаляем сообщение о процессе обработки
-                                    await safe_delete_message(processing_msg)
-                                    message_deleted = True
-                                except Exception as e:
-                                    logger.warning(f"Не удалось удалить сообщение: {str(e)}")
-                            
-                            # Определяем режим форматирования в зависимости от режима работы
-                            current_parse_mode = 'HTML' if mode in [MODE_SUMMARIZE, MODE_BOTH] else 'Markdown'
-                            logger.info(f"Используем режим форматирования: {current_parse_mode} для режима: {mode}")
-                            
-                            # Отправляем разделенное сообщение
-                            await send_split_message(
-                                context=context,
-                                chat_id=chat_id,
-                                message_text=result_message.strip(),
-                                reply_to_message_id=message.message_id,
-                                parse_mode=current_parse_mode
-                            )
-                            message_sent = True
-                        else:
-                            # Для коротких сообщений пробуем редактировать
-                            if processing_msg:
-                                # Используем безопасную функцию обновления сообщения
-                                success = await safe_edit_message(context, processing_msg, result_message.strip())
-                                if success:
-                                    logger.info("Сообщение успешно обновлено")
-                                    message_successfully_updated = True  # Помечаем сообщение как успешно обновленное
-                                    
-                                    # !!! ВАЖНО !!! Раннее завершение функции при успешном обновлении сообщения
-                                    # Это предотвращает дублирование сообщений
-                                    
-                                    # Удаляем временный файл перед выходом, если он существует
-                                    if voice_copy_path and os.path.exists(voice_copy_path):
-                                        os.unlink(voice_copy_path)
-                                    
-                                    # Обрабатываем TTS отдельно
-                                    if tts_enabled and mode in [MODE_TRANSLATE, MODE_BOTH]:
-                                        # Выбираем язык для озвучки - первый из списка доступных, исключая исходный
-                                        target_langs = [lang for lang in enabled_languages if lang != detected_lang]
-                                        if target_langs:
-                                            target_lang = target_langs[0]
-                                            target_text = result["translations"].get(target_lang)
-                                            if target_text:
-                                                await process_tts_async(target_text, target_lang, chat_id, context, message.message_id)
-                                    
-                                    # Завершаем функцию, чтобы избежать любых дальнейших действий и дублирования сообщений
-                                    return
-                                else:
-                                    # Если не удалось обновить сообщение, пробуем разные способы восстановления
-                                    logger.warning("Не удалось обновить сообщение")
-                                    
-                                    # Пробуем альтернативный метод обновления сообщения
-                                    if not message_successfully_updated and hasattr(processing_msg, 'edit_text'):
-                                        try:
-                                            await processing_msg.edit_text(
-                                                text=result_message.strip(),
-                                                parse_mode='Markdown'
-                                            )
-                                            message_successfully_updated = True
-                                            logger.info("Сообщение обновлено резервным способом")
-                                        except Exception as edit_error:
-                                            logger.warning(f"Ошибка резервного обновления: {edit_error}")
-                                    
-                                    # Если не удалось обновить сообщение никаким способом, тогда удаляем и отправляем заново
-                                    # НО! Для приватных чатов не удаляем сообщения, чтобы избежать дублирования
-                                    if not message_successfully_updated:  
-                                        # Проверяем, является ли это приватным чатом
-                                        is_private_chat = False
-                                        if (hasattr(message, 'chat') and message.chat and message.chat.type == ChatType.PRIVATE) or \
-                                           (hasattr(processing_msg, 'chat') and processing_msg.chat and processing_msg.chat.type == ChatType.PRIVATE):
-                                            is_private_chat = True
-                                        
-                                        # Проверяем, является ли это бизнес-сообщением
-                                        is_business = False
-                                        if hasattr(message, 'business_chat_id') or hasattr(processing_msg, 'business_chat_id'):
-                                            is_business = True
-                                        
-                                        # Если это приватный чат или бизнес-сообщение, не пытаемся удалять - просто отправляем новое сообщение
-                                        if is_private_chat or is_business:
-                                            logger.info("Не удаляем сообщение в приватном/бизнес чате во избежание дублирования")
-                                            try:
-                                                # Отправляем новое сообщение, но не удаляем предыдущее
-                                                await send_split_message(
-                                                    context=context,
-                                                    chat_id=chat_id,
-                                                    message_text=result_message.strip(),
-                                                    reply_to_message_id=message.message_id,
-                                                    parse_mode='Markdown'
-                                                )
-                                                message_successfully_updated = True  # Помечаем как обработанное
-                                            except Exception as inner_error:
-                                                logger.error(f"Не удалось отправить новое сообщение: {inner_error}")
-                                        else:
-                                            # Для групповых чатов тоже не удаляем сообщения, а просто отправляем новое
-                                            logger.info("Для группового чата не удаляем сообщение, отправляем новое")
-                                            try:
-                                                # Отправляем новое сообщение без удаления предыдущего
-                                                await send_split_message(
-                                                    context=context,
-                                                    chat_id=chat_id,
-                                                    message_text=result_message.strip(),
-                                                    reply_to_message_id=message.message_id,
-                                                    parse_mode='Markdown'
-                                                )
-                                                message_successfully_updated = True  # Помечаем как обработанное
-                                            except Exception as inner_error:
-                                                logger.error(f"Не удалось отправить новое сообщение: {inner_error}")
-                            else:
-                                # Проверяем оба флага. Если сообщение успешно обновлено или отправлено, мы не делаем ничего дополнительного
-                                # Исправлено для предотвращения дублирования сообщений
-                                if message_successfully_updated:
-                                    logger.info(f"Сообщение успешно обновлено ранее, не дублируем")
-                                    # Ничего не делаем, сообщение уже обновлено
-                                elif message_sent:
-                                    logger.info(f"Сообщение уже отправлено ранее, не дублируем")
-                                    # Ничего не делаем, сообщение уже отправлено
-                                else:
-                                    # Только если сообщение не было ни обновлено, ни отправлено - отправляем его
-                                    logger.info("Отправляем новое сообщение, так как ранее не было отправлено")
-                                    await send_split_message(
-                                        context=context,
-                                        chat_id=chat_id,
-                                        message_text=result_message.strip(),
-                                        reply_to_message_id=message.message_id,
-                                        parse_mode='Markdown'
-                                    )
-                                    message_sent = True
-                    
-                    # Удаляем временный файл если он существует
-                    if voice_copy_path and os.path.exists(voice_copy_path):
-                        os.unlink(voice_copy_path)
-                            
-                except Exception as e:
-                    logger.error(f"Ошибка при обработке голосового сообщения: {e}", exc_info=True)
-                    # В случае ошибки отправляем текстовое сообщение
-                    if processing_msg:
-                        try:
-                            await context.bot.edit_message_text(
-                                text=result_message.strip(),
-                                chat_id=processing_msg.chat_id,
-                                message_id=processing_msg.message_id,
-                                parse_mode='Markdown'
-                            )
-                        except Exception as edit_error:
-                            logger.error(f"Ошибка при обновлении сообщения: {edit_error}", exc_info=True)
-                            # Если не удалось обновить, пробуем ответить на исходное сообщение
-                            await message.reply_text(result_message.strip(), parse_mode='HTML')
-                    else:
-                        # Если нет сообщения об обработке, отвечаем на исходное
-                        await message.reply_text(result_message.strip(), parse_mode='HTML')
-                else:
-                    # Для чужих сообщений - стандартная обработка
-                    if is_chat_owner and processing_msg is not None:
-                        # Для владельца чата - редактируем сообщение с обработкой, если оно есть
-                        try:
-                            # Пробуем отредактировать сообщение
-                            await context.bot.edit_message_text(
-                                text=result_message.strip(),
-                                chat_id=processing_msg.chat_id,
-                                message_id=processing_msg.message_id,
-                                parse_mode='Markdown'
-                            )
-                        except Exception as e:
-                            # Если не получилось (например, сообщение слишком длинное), удаляем сообщение об обработке
-                            logger.warning(f"Не удалось отредактировать сообщение: {e}")
-                            await safe_delete_message(processing_msg)
-                            
-                            # И отправляем разделенное сообщение
-                            await send_split_message(
-                                context=context,
-                                chat_id=chat_id,
-                                message_text=result_message.strip(),
-                                reply_to_message_id=message.message_id,
-                                parse_mode='Markdown'
-                            )
-                    elif processing_msg is None:
-                        # Если нет сообщения об обработке (для собственных сообщений), просто отправляем ответ
-                        try:
-                            await message.reply_text(result_message.strip(), parse_mode='HTML')
-                        except Exception as e:
-                            logger.warning(f"Не удалось отправить сообщение: {e}")
-                            # Используем функцию разделения для длинных сообщений
-                            await send_split_message(
-                                context=context,
-                                chat_id=chat_id,
-                                message_text=result_message.strip(),
-                                reply_to_message_id=message.message_id,
-                                parse_mode='Markdown'
-                            )
-                    else:
-                        # Если сообщение еще не было отправлено
-                        if not message_sent:
-                            # Для остальных - отправляем новое сообщение и удаляем сообщение о обработке, если оно есть
-                            if processing_msg:
-                                await safe_delete_message(processing_msg)
-                            
-                            # Отправляем сообщение с учетом возможной большой длины
-                            try:
-                                await message.reply_text(result_message.strip(), parse_mode='HTML')
-                                message_sent = True
-                            except Exception as e:
-                                logger.warning(f"Не удалось отправить сообщение сразу: {e}")
-                                # Если не получилось, используем функцию разделения
-                                await send_split_message(
-                                    context=context,
-                                    chat_id=chat_id,
-                                    message_text=result_message.strip(),
-                                    reply_to_message_id=message.message_id,
-                                    parse_mode='Markdown'
-                                )
-                                message_sent = True
-                        else:
-                            # Если сообщение уже было отправлено, просто удаляем сообщение о обработке
-                            if processing_msg:
-                                await safe_delete_message(processing_msg)
-                    
-                # Если включена генерация аудио, отправляем озвученный перевод
-                if tts_enabled and mode in [MODE_TRANSLATE, MODE_BOTH]:
-                    # Выбираем язык для озвучки - первый из списка доступных, исключая исходный
-                    target_langs = [lang for lang in enabled_languages if lang != detected_lang]
-                    if target_langs:
-                        target_lang = target_langs[0]
-                        target_text = result["translations"].get(target_lang)
-                        
-                        if target_text:
-                            # Проверяем тип чата, чтобы избежать дублирования в приватных
-                            chat_type = message.chat.type if hasattr(message, 'chat') else "unknown"
-                            is_private = chat_type == ChatType.PRIVATE
-                            
-                            # В приватных чатах отправляем дополнительное сообщение только если основной перевод
-                            # уже был успешно отправлен или обновлен ранее
-                            should_send_notification = not is_private or (is_private and (message_successfully_updated or message_sent))
-                            
-                            if should_send_notification:
-                                await message.reply_text(f"🎤 Отправляю озвученный перевод на {LANG_EMOJIS.get(target_lang, '')}...")
-                            else:
-                                logger.info(f"Не отправляем дополнительное сообщение об аудио в приватном чате")
-                            
-                            try:
-                                audio_content = await generate_audio(target_text, target_lang)
-                                
-                                # Сохраняем аудио во временный файл
-                                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_tts:
-                                    temp_tts.write(audio_content)
-                                    logger.info(f"💾 Сохранено аудио перевода: {temp_tts.name}")
-                                    # Отправляем аудио перевода
-                                    await message.reply_voice(temp_tts.name)
-                                    # Удаляем временный файл
-                                    os.unlink(temp_tts.name)
-                            except Exception as e:
-                                logger.error(f"❌ Ошибка при генерации аудио: {str(e)}", exc_info=True)
-                                await message.reply_text("😔 Извините, произошла ошибка при создании аудио.")
-            finally:
-                # Удаляем временный файл с аудио
-                os.unlink(temp_audio.name)
-                
+                await processing_msg.delete()
+            except Exception:
+                pass
+            return
+
+        # Форматируем результат
+        result_message = _format_result_message(result, mode, detected_lang)
+
+        # Отправляем результат
+        await _send_result(context, message, processing_msg, result_message, mode)
+
+        # TTS если включён
+        if tts_enabled and mode in [MODE_TRANSLATE, MODE_BOTH]:
+            await _handle_tts(context, message, result, detected_lang, enabled_languages)
+
     except Exception as e:
-        logger.error(f"❌ Ошибка при обработке голосового сообщения: {str(e)}", exc_info=True)
+        logger.error(f"Ошибка обработки голосового: {e}", exc_info=True)
         try:
-            # Пытаемся отправить ответ через правильный объект сообщения
-            error_message = "😔 Извините, произошла ошибка при обработке сообщения."
-            message_obj = get_effective_message(update)
-            if message_obj is not None:
-                await message_obj.reply_text(error_message)
-            else:
-                logger.error("Не удалось получить объект сообщения для отправки ошибки")
-        except Exception as inner_e:
-            logger.error(f"❌ Ошибка при отправке сообщения об ошибке: {str(inner_e)}", exc_info=True)
+            msg_obj = get_effective_message(update)
+            if msg_obj:
+                await msg_obj.reply_text("😔 Ошибка при обработке сообщения.")
+        except Exception:
+            pass
+    finally:
+        # Чистим temp-файл
+        if audio_path and os.path.exists(audio_path):
+            os.unlink(audio_path)
+
 
 def main():
     """Запуск бота"""
