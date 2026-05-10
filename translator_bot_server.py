@@ -147,18 +147,22 @@ LANG_EMOJIS = {
     "ru": "🇷🇺",
     "en": "🇬🇧",
     "id": "🇮🇩",
+    "th": "🇹🇭",
     "russian": "🇷🇺",
     "english": "🇬🇧",
     "indonesian": "🇮🇩",
+    "thai": "🇹🇭",
 }
 
 LANG_NORMALIZE = {
     "ru": "ru",
     "en": "en",
     "id": "id",
+    "th": "th",
     "russian": "ru",
     "english": "en",
     "indonesian": "id",
+    "thai": "th",
 }
 
 def normalize_lang_code(lang_code):
@@ -170,7 +174,8 @@ def normalize_lang_code(lang_code):
 VOICES = {
     'ru': 'onyx',
     'id': 'onyx',
-    'en': 'onyx'
+    'en': 'onyx',
+    'th': 'onyx'
 }
 
 # Инструкции для gpt-4o-mini-tts по языкам
@@ -178,6 +183,7 @@ TTS_INSTRUCTIONS = {
     'ru': 'Speak clearly in Russian with native pronunciation.',
     'id': 'Speak clearly in Indonesian (Bahasa Indonesia) with native pronunciation.',
     'en': 'Speak clearly in English with native pronunciation.',
+    'th': 'Speak clearly in Thai (ภาษาไทย) with native pronunciation.',
 }
 
 # Структура настроек по умолчанию для нового чата
@@ -444,9 +450,13 @@ def detect_language(text: str) -> str:
     # Считаем символы разных алфавитов
     cyrillic = sum(1 for c in text if 'Ѐ' <= c <= 'ӿ')
     latin = sum(1 for c in text if 'a' <= c.lower() <= 'z')
+    thai = sum(1 for c in text if '฀' <= c <= '๿')
     total = len(text.replace(' ', ''))
     if total == 0:
         return 'en'
+    # Если > 30% тайские символы — тайский
+    if thai / total > 0.3:
+        return 'thai'
     # Если > 30% кириллица — русский
     if cyrillic / total > 0.3:
         return 'russian'
@@ -459,38 +469,60 @@ def detect_language(text: str) -> str:
     return 'english'
 
 async def transcribe_audio(audio_file_path: str) -> tuple[str, str]:
-    """Преобразует аудио в текст используя gpt-4o-transcribe + определение языка"""
+    """Преобразует аудио в текст используя AssemblyAI (primary) с fallback на whisper-1"""
+    import assemblyai as aai
+
     try:
-        logger.info(f"Начинаем транскрибацию файла: {audio_file_path}")
-        with open(audio_file_path, "rb") as f:
-            response = openai_client.audio.transcriptions.create(
-                model="gpt-4o-transcribe",
-                file=f,
-            )
-        
-        detected_text = response.text
-        
-        # gpt-4o-transcribe не возвращает язык — определяем из текста и нормализуем
-        detected_lang = normalize_lang_code(detect_language(detected_text))
-        
-        logger.info(f"Транскрибация завершена. Язык: {detected_lang}")
+        logger.info(f"Транскрибация через AssemblyAI: {audio_file_path}")
+        aai.settings.api_key = "eaa9d3b8b08341f3bfc0d73a35f7d845"
+
+        config = aai.TranscriptionConfig(
+            speech_models=["universal-3-pro", "universal-2"],
+            language_detection=True
+        )
+        transcript = aai.Transcriber(config=config).transcribe(audio_file_path)
+
+        if transcript.status == "error" or not transcript.text:
+            raise RuntimeError(f"AssemblyAI error: {transcript.error}")
+
+        detected_text = transcript.text
+        lang_code = transcript.json_response.get("language_code", "")
+
+        # Нормализуем код языка (AssemblyAI возвращает "id", "ru", "en" и т.д.)
+        detected_lang = normalize_lang_code(lang_code) if lang_code else normalize_lang_code(detect_language(detected_text))
+
+        logger.info(f"AssemblyAI: {len(detected_text)} символов, язык: {detected_lang}")
         return detected_text, detected_lang
-    except openai.RateLimitError as e:
-        # Специальная обработка ошибки превышения квоты или лимита запросов
-        error_message = str(e)
-        if "insufficient_quota" in error_message or "exceeded your current quota" in error_message:
-            logger.error(f"❌ Исчерпан лимит API OpenAI: {error_message}", exc_info=True)
-            # Добавляем маркер в начало текста ошибки
-            error_message = "QUOTA_EXCEEDED: " + error_message
-        else:
-            # Обычная ошибка превышения скорости запросов
-            logger.error(f"❌ Превышен лимит запросов API OpenAI: {error_message}", exc_info=True)
-            error_message = "RATE_LIMIT: " + error_message
-        # Возвращаем текст ошибки с маркером, чтобы потом обработать ее в handle_voice
-        return error_message, ""
-    except Exception as e:
-        logger.error(f"Ошибка при транскрибации: {str(e)}", exc_info=True)
-        raise
+
+    except Exception as aai_error:
+        logger.warning(f"AssemblyAI failed: {aai_error}, fallback to whisper-1")
+
+        # Fallback на whisper-1
+        try:
+            with open(audio_file_path, "rb") as f:
+                response = openai_client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                    response_format="verbose_json"
+                )
+
+            detected_text = response.text
+            detected_lang = normalize_lang_code(response.language)
+
+            logger.info(f"whisper-1 fallback: {len(detected_text)} символов, язык: {detected_lang}")
+            return detected_text, detected_lang
+
+        except openai.RateLimitError as e:
+            error_message = str(e)
+            if "insufficient_quota" in error_message or "exceeded your current quota" in error_message:
+                logger.error(f"Исчерпан лимит API OpenAI: {error_message}")
+                return "QUOTA_EXCEEDED: " + error_message, ""
+            else:
+                logger.error(f"Превышен лимит запросов: {error_message}")
+                return "RATE_LIMIT: " + error_message, ""
+        except Exception as e:
+            logger.error(f"Ошибка транскрибации (оба метода): {e}", exc_info=True)
+            raise
 
 async def translate_with_gpt(text: str, source_lang: str, target_languages: list = None) -> dict:
     """Переводит текст используя ChatGPT с учетом целевых языков"""
@@ -504,6 +536,8 @@ async def translate_with_gpt(text: str, source_lang: str, target_languages: list
             target_languages = ['en', 'ru']
         elif source_lang == 'en':
             target_languages = ['ru', 'id']
+        elif source_lang == 'th':
+            target_languages = ['en', 'ru']
     
     try:
         logger.info(f"🔄 Начинаем перевод текста: {text} с языка {source_lang} на языки {target_languages}")
@@ -523,6 +557,9 @@ async def translate_with_gpt(text: str, source_lang: str, target_languages: list
                 elif lang == 'id':
                     target_languages_dict['indonesian'] = 'Indonesian'
                     format_parts.append('"indonesian": "translation"')
+                elif lang == 'th':
+                    target_languages_dict['thai'] = 'Thai'
+                    format_parts.append('"thai": "translation"')
         
         # Если нет целевых языков, возвращаем только исходный текст
         if not target_languages_dict:
@@ -532,7 +569,7 @@ async def translate_with_gpt(text: str, source_lang: str, target_languages: list
         languages_str = ", ".join(target_languages_dict.values())
         format_str = "{" + ", ".join(format_parts) + "}"
         
-        source_lang_name = "Russian" if source_lang == 'ru' else "Indonesian" if source_lang == 'id' else "English"
+        source_lang_name = "Russian" if source_lang == 'ru' else "Indonesian" if source_lang == 'id' else "Thai" if source_lang == 'th' else "English"
         
         system_prompt = f"""You are a professional translator with expertise in {source_lang_name} and {languages_str}. 
         Your task is to translate the given {source_lang_name} text while:
@@ -567,6 +604,8 @@ async def translate_with_gpt(text: str, source_lang: str, target_languages: list
             translations['ru'] = clean_text(result['russian'])
         if 'indonesian' in result and 'id' in target_languages:
             translations['id'] = clean_text(result['indonesian'])
+        if 'thai' in result and 'th' in target_languages:
+            translations['th'] = clean_text(result['thai'])
             
     except Exception as e:
         logger.error(f"Ошибка при переводе: {str(e)}", exc_info=True)
@@ -963,7 +1002,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '🔥 Основные возможности:\n'
         '• Перевод голосовых сообщений\n'
         '• Саммаризация длинных сообщений (>30 сек)\n'
-        '• Поддержка русского, английского и индонезийского языков\n'
+        '• Поддержка русского, английского, индонезийского и тайского языков\n'
         '• Быстрые команды для переключения режимов\n\n'
         'Для подробной информации отправьте команду /help или >help \n'
         'Для настройки бота используйте /settings или >settings'
@@ -991,11 +1030,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '3. Переведет и/или саммаризирует согласно настройкам\n'
         '4. Покажет результат\n\n'
         'Поддерживаемые языки:\n'
-        'Русский, Индонезийский, Английский\n\n'
+        'Русский, Индонезийский, Английский, Тайский\n\n'
         'Быстрые команды для языков:\n'
         '/settings_langs_ru_en - Русский и Английский\n'
         '/settings_langs_ru_id - Русский и Индонезийский\n'
-        '/settings_langs_en_id - Английский и Индонезийский\n\n'
+        '/settings_langs_en_id - Английский и Индонезийский\n'
+        '/settings_langs_ru_th - Русский и Тайский\n'
+        '/settings_langs_en_th - Английский и Тайский\n'
+        '/settings_langs_id_th - Индонезийский и Тайский\n\n'
         'Быстрые команды для режимов:\n'
         '/settings_mode_translate - только перевод\n'
         '/settings_mode_summarize - только саммаризация\n'
@@ -1094,7 +1136,10 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🌐 <b>Языки перевода</b>:\n"
         "/settings_langs_ru_en - Русский и Английский\n"
         "/settings_langs_ru_id - Русский и Индонезийский\n"
-        "/settings_langs_en_id - Английский и Индонезийский\n\n"
+        "/settings_langs_en_id - Английский и Индонезийский\n"
+        "/settings_langs_ru_th - Русский и Тайский\n"
+        "/settings_langs_en_th - Английский и Тайский\n"
+        "/settings_langs_id_th - Индонезийский и Тайский\n\n"
         
         "🔊 <b>Генерация аудио</b>:\n"
         "/tts_on - включить генерацию аудио\n"
@@ -1169,27 +1214,30 @@ async def settings_langs_command(update: Update, context: ContextTypes.DEFAULT_T
         await message_obj.reply_text(
             "❓ Пожалуйста, укажите языки для перевода. Например:\n"
             "`/settings_langs ru en` - для русского и английского\n"
-            "Доступные языки: ru (Русский), en (Английский), id (Индонезийский)\n\n"
+            "Доступные языки: ru (Русский), en (Английский), id (Индонезийский), th (Тайский)\n\n"
             "Или используйте быстрые команды:\n"
             "/settings_langs_ru_en - Русский и Английский\n"
             "/settings_langs_ru_id - Русский и Индонезийский\n"
-            "/settings_langs_en_id - Английский и Индонезийский"
+            "/settings_langs_en_id - Английский и Индонезийский\n"
+            "/settings_langs_ru_th - Русский и Тайский\n"
+            "/settings_langs_en_th - Английский и Тайский\n"
+            "/settings_langs_id_th - Индонезийский и Тайский"
         )
         return
-    
+
     # Валидация языков
-    valid_langs = ["ru", "en", "id"]
+    valid_langs = ["ru", "en", "id", "th"]
     selected_langs = []
-    
+
     for lang in args:
         lang = lang.lower()
         if lang in valid_langs:
             selected_langs.append(lang)
-    
+
     if not selected_langs:
         await message_obj.reply_text(
             "❌ Не указаны корректные языки. Доступные языки:\n"
-            "ru (Русский), en (Английский), id (Индонезийский)"
+            "ru (Русский), en (Английский), id (Индонезийский), th (Тайский)"
         )
         return
     
@@ -1218,6 +1266,21 @@ async def settings_langs_en_id_command(update: Update, context: ContextTypes.DEF
     """Быстрая команда для выбора английского и индонезийского языков"""
     # Создаем аргументы вручную и перенаправляем на основную функцию
     context.args = ["en", "id"]
+    await settings_langs_command(update, context)
+
+async def settings_langs_ru_th_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрая команда для выбора русского и тайского языков"""
+    context.args = ["ru", "th"]
+    await settings_langs_command(update, context)
+
+async def settings_langs_en_th_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрая команда для выбора английского и тайского языков"""
+    context.args = ["en", "th"]
+    await settings_langs_command(update, context)
+
+async def settings_langs_id_th_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрая команда для выбора индонезийского и тайского языков"""
+    context.args = ["id", "th"]
     await settings_langs_command(update, context)
 
 async def settings_mode_translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1697,6 +1760,9 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
         "settings_langs_ru_en": settings_langs_ru_en_command,
         "settings_langs_ru_id": settings_langs_ru_id_command,
         "settings_langs_en_id": settings_langs_en_id_command,
+        "settings_langs_ru_th": settings_langs_ru_th_command,
+        "settings_langs_en_th": settings_langs_en_th_command,
+        "settings_langs_id_th": settings_langs_id_th_command,
         "mode": settings_mode_command,
         "settings_mode": settings_mode_command,
         "settings_mode_translate": settings_mode_translate_command,
@@ -1714,6 +1780,9 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
         "ru_en": settings_langs_ru_en_command,
         "ru_id": settings_langs_ru_id_command,
         "en_id": settings_langs_en_id_command,
+        "ru_th": settings_langs_ru_th_command,
+        "en_th": settings_langs_en_th_command,
+        "id_th": settings_langs_id_th_command,
         "translate": settings_mode_translate_command,
         "summarize": settings_mode_summarize_command,
         "both": settings_mode_both_command,
@@ -1767,6 +1836,8 @@ async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TY
         media_type = "voice"
     elif message.video_note:
         media_type = "video_note"
+    elif message.video:
+        media_type = "video"
     elif message.document and message.document.mime_type and message.document.mime_type.startswith('audio/'):
         media_type = "document"
     elif message.audio:
@@ -1776,9 +1847,6 @@ async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TY
         biz_tag = " (бизнес)" if is_business else ""
         logger.info(f"Получено {media_type} сообщение{biz_tag}. Тип чата: {chat_type}")
         await handle_voice(update, context, is_business=is_business, media_type=media_type)
-    elif hasattr(message, 'text') and message.text and not message.text.startswith(('/', '>')):
-        # Автоперевод текстовых сообщений (если язык отличается от настроенных)
-        await handle_text_translation(message, context)
 
 def _get_voice_duration(message, media_type: str) -> int:
     """Извлекает длительность аудио из сообщения"""
@@ -1788,6 +1856,8 @@ def _get_voice_duration(message, media_type: str) -> int:
         return message.audio.duration
     if media_type == "video_note" and message.video_note and hasattr(message.video_note, 'duration'):
         return message.video_note.duration
+    if media_type == "video" and message.video and hasattr(message.video, 'duration'):
+        return message.video.duration
     if media_type == "document":
         return 30
     return 0
@@ -1824,6 +1894,9 @@ async def _download_audio_file(message, media_type: str) -> tuple:
                 file_extension = ext
     elif media_type == "video_note":
         file_to_download = await message.video_note.get_file()
+        file_extension = '.mp4'
+    elif media_type == "video":
+        file_to_download = await message.video.get_file()
         file_extension = '.mp4'
 
     if not file_to_download:
@@ -1936,6 +2009,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE, is_bu
     if media_type == "voice" and not message.voice:
         return
     if media_type == "video_note" and not message.video_note:
+        return
+    if media_type == "video" and not message.video:
         return
     if media_type == "document" and not message.document:
         return
@@ -2073,6 +2148,9 @@ def main():
     application.add_handler(CommandHandler("settings_langs_ru_en", settings_langs_ru_en_command))
     application.add_handler(CommandHandler("settings_langs_ru_id", settings_langs_ru_id_command))
     application.add_handler(CommandHandler("settings_langs_en_id", settings_langs_en_id_command))
+    application.add_handler(CommandHandler("settings_langs_ru_th", settings_langs_ru_th_command))
+    application.add_handler(CommandHandler("settings_langs_en_th", settings_langs_en_th_command))
+    application.add_handler(CommandHandler("settings_langs_id_th", settings_langs_id_th_command))
     application.add_handler(CommandHandler("mode", settings_mode_command))
     application.add_handler(CommandHandler("settings_mode", settings_mode_command))
     
