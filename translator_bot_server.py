@@ -2003,7 +2003,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         if can_edit_own:
             try:
                 bcid = getattr(message, 'business_connection_id', None)
-                new_text = f"{text}\n{translations_block}"
+                new_text = f"{text}\n\n{translations_block}"
                 await context.bot.edit_message_text(
                     chat_id=message.chat.id,
                     message_id=message.message_id,
