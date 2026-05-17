@@ -190,7 +190,8 @@ TTS_INSTRUCTIONS = {
 DEFAULT_CHAT_SETTINGS = {
     "enabled_languages": ["ru", "en"],  # Языки, для которых активен перевод
     "mode": MODE_TRANSLATE,             # Режим работы бота (по умолчанию - только перевод)
-    "tts_enabled": False                # Генерация аудио отключена по умолчанию
+    "tts_enabled": False,               # Генерация аудио отключена по умолчанию
+    "text_translate": False             # Перевод текстовых сообщений отключён по умолчанию
 }
 
 # Загрузка настроек чатов
@@ -1001,6 +1002,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'Я голосовой переводчик и саммаризатор. Отправляйте мне голосовые сообщения, а я буду их переводить и/или создавать краткое резюме.\n\n'
         '🔥 Основные возможности:\n'
         '• Перевод голосовых сообщений\n'
+        '• Перевод текстовых сообщений (опционально, по флагу /text_on)\n'
         '• Саммаризация длинных сообщений (>30 сек)\n'
         '• Поддержка русского, английского, индонезийского и тайского языков\n'
         '• Быстрые команды для переключения режимов\n\n'
@@ -1047,14 +1049,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '/tts_on - включить генерацию аудио\n'
         '/tts_off - выключить генерацию аудио\n'
         '/tts on/off - традиционное управление аудио\n'
+        '/text_on - включить перевод текстовых сообщений\n'
+        '/text_off - выключить перевод текстовых сообщений\n'
+        '/text on/off - традиционное управление переводом текста\n'
         '/balance - проверить баланс OpenAI API (только для владельца)\n\n'
         'Обработка голосовых сообщений:\n'
         '- Короткие (менее 30 сек): только перевод в режиме "summarize"\n'
         '- Длинные (более 30 сек): автоматически добавляется саммаризация\n\n'
+        'Обработка текстовых сообщений:\n'
+        '- По умолчанию выключена. Включается флагом /text_on per-чат.\n'
+        '- Когда включена — переводит на все enabled_languages кроме источника.\n\n'
         'Настройки:\n'
         '/settings - все настройки бота для текущего чата\n'
         '/languages - настройка языков перевода\n'
-        '/tts - включение/выключение озвучки'
+        '/tts - включение/выключение озвучки\n'
+        '/text - включение/выключение перевода текста'
     )
     
     # Добавляем информацию о командах с префиксом ">" для приватных чатов
@@ -1070,8 +1079,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '>translate - только перевод\n'
             '>summarize - только саммаризация\n'
             '>both - и перевод, и саммаризация\n\n'
+            '<b>Перевод текстовых сообщений:</b>\n'
+            '>text_on - включить перевод текста\n'
+            '>text_off - выключить перевод текста\n\n'
             'Также работают все обычные команды с префиксом ">":\n'
-            '>help, >settings, >languages, >tts и т.д.'
+            '>help, >settings, >languages, >tts, >text и т.д.'
         )
         help_text += alternative_help
     
@@ -1144,14 +1156,19 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔊 <b>Генерация аудио</b>:\n"
         "/tts_on - включить генерацию аудио\n"
         "/tts_off - выключить генерацию аудио\n\n"
-        
+
+        "📝 <b>Перевод текстовых сообщений</b>:\n"
+        "/text_on - включить перевод текста\n"
+        "/text_off - выключить перевод текста\n\n"
+
         "📊 <b>Статистика</b> (только для владельца):\n"
         "/stats - получить статистику использования бота\n\n"
-        
+
         "🔄 <b>Текущие настройки</b>:\n"
         f"- Языки: {', '.join(chat_settings['enabled_languages'])}\n"
         f"- Режим: {chat_settings['mode']}\n"
-        f"- Генерация аудио: {'✅ Включена' if chat_settings['tts_enabled'] else '❌ Выключена'}"
+        f"- Генерация аудио: {'✅ Включена' if chat_settings['tts_enabled'] else '❌ Выключена'}\n"
+        f"- Перевод текста: {'✅ Включён' if chat_settings.get('text_translate', False) else '❌ Выключен'}"
     )
     
     # Получаем актуальный объект сообщения для ответа
@@ -1485,6 +1502,76 @@ async def settings_tts_command(update: Update, context: ContextTypes.DEFAULT_TYP
         f"Генерация аудио: {'✅ Включена' if tts_enabled else '❌ Выключена'}"
     )
 
+
+async def settings_text_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /settings_text для включения/выключения перевода текстовых сообщений"""
+    message_obj = get_effective_message(update)
+    if message_obj is None:
+        logger.error("None message_obj в settings_text_command")
+        return
+
+    user = update.effective_user
+    chat = update.effective_chat
+    if not chat:
+        return
+
+    # Права администратора
+    is_admin = False
+    if chat.type != ChatType.PRIVATE:
+        try:
+            chat_member = await context.bot.get_chat_member(chat.id, user.id)
+            is_admin = chat_member.status in ['creator', 'administrator']
+        except Exception as e:
+            logger.error(f"Ошибка при проверке прав администратора: {str(e)}", exc_info=True)
+    else:
+        is_admin = True
+
+    # Владелец бота
+    is_owner_flag = False
+    if user.username and OWNER_USERNAME and user.username.lower() == OWNER_USERNAME.lower():
+        is_owner_flag = True
+    elif OWNER_ID and str(user.id) == str(OWNER_ID):
+        is_owner_flag = True
+
+    if not (is_admin or is_owner_flag):
+        await message_obj.reply_text("❌ У вас нет прав для изменения настроек бота в этом чате.")
+        return
+
+    settings = load_chat_settings()
+    chat_id_str = str(chat.id)
+    if chat_id_str not in settings:
+        settings[chat_id_str] = DEFAULT_CHAT_SETTINGS.copy()
+
+    args = context.args
+    if not args or args[0].lower() not in ["on", "off"]:
+        await message_obj.reply_text(
+            "❓ Пожалуйста, укажите 'on' для включения или 'off' для выключения перевода текста.\n"
+            "Пример: `/settings_text on`"
+        )
+        return
+
+    text_translate = args[0].lower() == "on"
+    settings[chat_id_str]["text_translate"] = text_translate
+    save_chat_settings(settings)
+
+    await message_obj.reply_text(
+        f"✅ Настройки перевода текста обновлены!\n"
+        f"Перевод текстовых сообщений: {'✅ Включён' if text_translate else '❌ Выключен'}"
+    )
+
+
+async def text_on_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрая команда для включения перевода текстовых сообщений"""
+    context.args = ["on"]
+    await settings_text_command(update, context)
+
+
+async def text_off_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрая команда для выключения перевода текстовых сообщений"""
+    context.args = ["off"]
+    await settings_text_command(update, context)
+
+
 async def is_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Проверяет, является ли отправитель владельцем бота."""
     message = update.message if update.message else update.callback_query.message
@@ -1774,6 +1861,9 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
         "tts": settings_tts_command,
         "tts_on": tts_on_command,
         "tts_off": tts_off_command,
+        "text": settings_text_command,
+        "text_on": text_on_command,
+        "text_off": text_off_command,
         "stats": stats_command,
         
         # Добавляем сокращенные версии команд для удобства
@@ -1811,6 +1901,99 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
     
     return False
 
+# === ПЕРЕВОД ТЕКСТОВЫХ СООБЩЕНИЙ (опциональная фича, флаг chat_settings.text_translate) ===
+_text_recently_translated = {}  # "chat_id:prefix50" -> timestamp
+
+
+def _is_text_duplicate(chat_id, text):
+    """Защита от петель/дублей при переводе текстовых сообщений (окно 30 сек)"""
+    if not text:
+        return False
+    import time as _time
+    key = f"{chat_id}:{text[:50]}"
+    now = _time.time()
+    if key in _text_recently_translated and now - _text_recently_translated[key] < 30:
+        return True
+    _text_recently_translated[key] = now
+    if len(_text_recently_translated) > 200:
+        for k in list(_text_recently_translated.keys()):
+            if now - _text_recently_translated[k] > 60:
+                del _text_recently_translated[k]
+    return False
+
+
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                              message, is_business: bool) -> None:
+    """Перевод текстовых сообщений. Активен только если в чате установлен флаг text_translate=True.
+
+    Использует те же enabled_languages и translate_with_gpt что и для голосовых.
+    Переводит на все enabled_languages кроме источника. Отвечает reply'ем на исходное сообщение."""
+    text = (message.text or '').strip()
+    if not text:
+        return
+
+    # Команды (/, >, #) — не переводим
+    if text.startswith(('/', '>', '#')):
+        return
+
+    # Сообщения которые сами выглядят как наш перевод — не переводим (анти-петля)
+    if text.startswith('🌐') or text.startswith('📝'):
+        return
+
+    chat_id_str = str(message.chat.id)
+    settings_all = load_chat_settings()
+    chat_settings = settings_all.get(chat_id_str, DEFAULT_CHAT_SETTINGS)
+
+    # Флаг должен быть включён в этом чате
+    if not chat_settings.get("text_translate", False):
+        return
+
+    # Симметрично с голосовым workflow: переводим ВСЕ сообщения (свои и чужие).
+    # Для бизнес-чата это значит ты будешь видеть и оригинал, и перевод своих сообщений —
+    # точно как для голосовых сейчас. Если в будущем захочется фильтра — добавим флаг.
+
+    # Дебаунс — не переводим одно и то же дважды
+    if _is_text_duplicate(message.chat.id, text):
+        logger.info(f"[text-translate] Дубль в {chat_id_str}, пропуск")
+        return
+
+    # Определяем источник + нормализуем
+    source_lang = detect_language(text)
+    if source_lang == 'russian':    source_lang = 'ru'
+    elif source_lang == 'english':  source_lang = 'en'
+    elif source_lang == 'indonesian': source_lang = 'id'
+    elif source_lang == 'thai':     source_lang = 'th'
+
+    enabled_languages = chat_settings.get("enabled_languages", ["ru", "en"])
+    target_languages = [lang for lang in enabled_languages if lang != source_lang]
+    if not target_languages:
+        return  # источник = единственный включённый язык, переводить некуда
+
+    logger.info(f"📝 Перевод текста ({source_lang}→{target_languages}) в {chat_id_str}: {text[:80]}")
+
+    try:
+        translations = await translate_with_gpt(text, source_lang, target_languages)
+        if not translations:
+            logger.info(f"  [text-translate] Пустой результат GPT, пропуск")
+            return
+
+        # Формируем ответ
+        lines = []
+        for lang, trans in translations.items():
+            if not trans:
+                continue
+            emoji = LANG_EMOJIS.get(lang, '🌐')
+            lines.append(f"{emoji} {trans}")
+        reply_text = "\n".join(lines)
+        if not reply_text:
+            return
+
+        await safe_send_message(message, reply_text)
+        logger.info(f"  [text-translate] Отправлен перевод ({source_lang}→{','.join(target_languages)})")
+    except Exception as e:
+        logger.error(f"Ошибка перевода текста в {chat_id_str}: {e}", exc_info=True)
+
+
 async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Универсальный обработчик для всех типов сообщений (обычных и бизнес)"""
     # Определяем сообщение и тип
@@ -1847,6 +2030,9 @@ async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TY
         biz_tag = " (бизнес)" if is_business else ""
         logger.info(f"Получено {media_type} сообщение{biz_tag}. Тип чата: {chat_type}")
         await handle_voice(update, context, is_business=is_business, media_type=media_type)
+    elif hasattr(message, 'text') and message.text:
+        # Текстовое сообщение — переводим если флаг text_translate включён для чата
+        await handle_text_message(update, context, message, is_business)
 
 def _get_voice_duration(message, media_type: str) -> int:
     """Извлекает длительность аудио из сообщения"""
@@ -2168,6 +2354,12 @@ def main():
     application.add_handler(CommandHandler("tts", settings_tts_command))
     application.add_handler(CommandHandler("tts_on", tts_on_command))
     application.add_handler(CommandHandler("tts_off", tts_off_command))
+
+    # Перевод текстовых сообщений (флаг text_translate в chat_settings)
+    application.add_handler(CommandHandler("text", settings_text_command))
+    application.add_handler(CommandHandler("settings_text", settings_text_command))
+    application.add_handler(CommandHandler("text_on", text_on_command))
+    application.add_handler(CommandHandler("text_off", text_off_command))
     
     # Добавляем обработчик статистики
     application.add_handler(CommandHandler("stats", stats_command))
