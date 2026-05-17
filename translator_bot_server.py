@@ -1977,19 +1977,47 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.info(f"  [text-translate] Пустой результат GPT, пропуск")
             return
 
-        # Формируем ответ
+        # Формируем блок переводов: 🇬🇧 ..., 🇮🇩 ..., ...
         lines = []
         for lang, trans in translations.items():
             if not trans:
                 continue
             emoji = LANG_EMOJIS.get(lang, '🌐')
             lines.append(f"{emoji} {trans}")
-        reply_text = "\n".join(lines)
-        if not reply_text:
+        translations_block = "\n".join(lines)
+        if not translations_block:
             return
 
-        await safe_send_message(message, reply_text)
-        logger.info(f"  [text-translate] Отправлен перевод ({source_lang}→{','.join(target_languages)})")
+        # Если это моё сообщение в business-чате — редактируем оригинал
+        # (оставляем мой текст + добавляем перевод снизу). Зеркально с WhatsApp `edit:`.
+        # Если редактирование невозможно (чужое сообщение, не-business чат, edit упал) —
+        # шлём reply со встроенным переводом.
+        can_edit_own = (
+            is_business
+            and message.from_user
+            and OWNER_ID
+            and str(message.from_user.id) == str(OWNER_ID)
+        )
+
+        edited = False
+        if can_edit_own:
+            try:
+                bcid = getattr(message, 'business_connection_id', None)
+                new_text = f"{text}\n{translations_block}"
+                await context.bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    business_connection_id=bcid,
+                    text=new_text
+                )
+                edited = True
+                logger.info(f"  [text-translate] EDIT моего сообщения ({source_lang}→{','.join(target_languages)})")
+            except Exception as edit_err:
+                logger.warning(f"  [text-translate] Edit не удался, fallback reply: {edit_err}")
+
+        if not edited:
+            await safe_send_message(message, translations_block)
+            logger.info(f"  [text-translate] Отправлен REPLY с переводом ({source_lang}→{','.join(target_languages)})")
     except Exception as e:
         logger.error(f"Ошибка перевода текста в {chat_id_str}: {e}", exc_info=True)
 
