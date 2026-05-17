@@ -1940,6 +1940,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text.startswith('🌐') or text.startswith('📝'):
         return
 
+    # В тексте должно быть минимум 2 буквы любого алфавита — иначе нечего переводить
+    # (одиночные эмодзи, ")", "+1", "...", чистая пунктуация — пропускаем)
+    if len(re.findall(r'[^\W\d_]', text, re.UNICODE)) < 2:
+        return
+
     chat_id_str = str(message.chat.id)
     settings_all = load_chat_settings()
     chat_settings = settings_all.get(chat_id_str, DEFAULT_CHAT_SETTINGS)
@@ -2016,8 +2021,21 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 logger.warning(f"  [text-translate] Edit не удался, fallback reply: {edit_err}")
 
         if not edited:
-            await safe_send_message(message, translations_block)
-            logger.info(f"  [text-translate] Отправлен REPLY с переводом ({source_lang}→{','.join(target_languages)})")
+            # Отправляем как REPLY с явным quote оригинала (чтобы было видно, что переводим)
+            bcid = getattr(message, 'business_connection_id', None)
+            try:
+                await context.bot.send_message(
+                    chat_id=message.chat.id,
+                    text=translations_block,
+                    reply_to_message_id=message.message_id,
+                    allow_sending_without_reply=True,
+                    business_connection_id=bcid,
+                )
+                logger.info(f"  [text-translate] Отправлен REPLY с quote ({source_lang}→{','.join(target_languages)})")
+            except Exception as send_err:
+                # Last-ditch fallback без quote — лишь бы перевод дошёл
+                logger.warning(f"  [text-translate] reply_to_message_id не сработал, отправляю без quote: {send_err}")
+                await safe_send_message(message, translations_block)
     except Exception as e:
         logger.error(f"Ошибка перевода текста в {chat_id_str}: {e}", exc_info=True)
 
