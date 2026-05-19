@@ -526,10 +526,17 @@ async def transcribe_audio(audio_file_path: str) -> tuple[str, str]:
             raise
 
 async def translate_with_gpt(text: str, source_lang: str, target_languages: list = None) -> dict:
-    """Переводит текст используя ChatGPT с учетом целевых языков"""
-    translations = {}  # Не добавляем исходный текст в словарь переводов
-    
-    # Если целевые языки не указаны, используем все поддерживаемые
+    """Переводит текст используя ChatGPT с учетом целевых языков.
+
+    Поддерживает два режима:
+      - Known source: source_lang ∈ {ru, en, id, th, ...} — обычный перевод на target_languages кроме source
+      - Auto-detect: source_lang ∈ {None, '', 'auto', 'unknown'} — GPT сам определит source
+        и НЕ будет переводить на язык, совпадающий с source (вернёт "" для такого target).
+    """
+    translations = {}
+    auto_mode = source_lang in (None, '', 'auto', 'unknown')
+
+    # Если целевые языки не указаны — заполняем по дефолту
     if target_languages is None:
         if source_lang == 'ru':
             target_languages = ['en', 'id']
@@ -539,81 +546,110 @@ async def translate_with_gpt(text: str, source_lang: str, target_languages: list
             target_languages = ['ru', 'id']
         elif source_lang == 'th':
             target_languages = ['en', 'ru']
-    
+        else:
+            target_languages = ['ru', 'en']  # safe fallback for auto
+
     try:
-        logger.info(f"🔄 Начинаем перевод текста: {text} с языка {source_lang} на языки {target_languages}")
-        
-        # Формируем промпт для GPT в зависимости от исходного языка и целевых языков
+        # Формируем target_languages_dict (исключаем source в known-mode; auto оставляет всё)
         target_languages_dict = {}
         format_parts = []
-        
+        lang_to_json_key = {'ru': 'russian', 'en': 'english', 'id': 'indonesian', 'th': 'thai'}
+        json_key_to_lang = {v: k for k, v in lang_to_json_key.items()}
+        lang_to_name = {'ru': 'Russian', 'en': 'English', 'id': 'Indonesian', 'th': 'Thai'}
+
         for lang in target_languages:
-            if lang != source_lang:
-                if lang == 'ru':
-                    target_languages_dict['russian'] = 'Russian'
-                    format_parts.append('"russian": "translation"')
-                elif lang == 'en':
-                    target_languages_dict['english'] = 'English'
-                    format_parts.append('"english": "translation"')
-                elif lang == 'id':
-                    target_languages_dict['indonesian'] = 'Indonesian'
-                    format_parts.append('"indonesian": "translation"')
-                elif lang == 'th':
-                    target_languages_dict['thai'] = 'Thai'
-                    format_parts.append('"thai": "translation"')
-        
-        # Если нет целевых языков, возвращаем только исходный текст
+            if not auto_mode and lang == source_lang:
+                continue
+            if lang in lang_to_json_key:
+                key = lang_to_json_key[lang]
+                target_languages_dict[key] = lang_to_name[lang]
+                if auto_mode:
+                    format_parts.append(f'"{key}": "translation_or_empty_if_source"')
+                else:
+                    format_parts.append(f'"{key}": "translation"')
+
         if not target_languages_dict:
             return translations
-            
-        # Создаем строку с языками для промпта
+
         languages_str = ", ".join(target_languages_dict.values())
-        format_str = "{" + ", ".join(format_parts) + "}"
-        
-        source_lang_name = "Russian" if source_lang == 'ru' else "Indonesian" if source_lang == 'id' else "Thai" if source_lang == 'th' else "English"
-        
-        system_prompt = f"""You are a professional translator with expertise in {source_lang_name} and {languages_str}. 
-        Your task is to translate the given {source_lang_name} text while:
-        1. 🎯 Preserving the original meaning and context
-        2. 💫 Using natural, fluent language in the target languages
-        3. 🎭 Maintaining the tone and style of the original text
-        4. 🔍 Being attentive to cultural nuances
-        5. 📚 Using appropriate idioms when applicable
-        
-        Return translations in this exact JSON format:
-        {format_str}"""
-        
+
+        if auto_mode:
+            # Добавляем detected_language в формат ответа
+            full_format = '{"detected_language": "iso (ru/en/id/th)", ' + ", ".join(format_parts) + '}'
+            system_prompt = (
+                "You are a professional translator.\n"
+                "Detect the language of the input (return ISO code: ru/en/id/th).\n"
+                f"Translate the text to these target languages: {languages_str}.\n"
+                "IMPORTANT: If the detected source language matches one of the targets, "
+                'leave that target translation as an empty string "" — do not translate same to same.\n'
+                "Preserve meaning, tone, style, cultural nuances. Add 1-3 fitting emojis inside "
+                "the translation where they naturally fit the meaning (do not overdo).\n\n"
+                f"Return JSON in this exact format:\n{full_format}"
+            )
+        else:
+            format_str = "{" + ", ".join(format_parts) + "}"
+            source_lang_name = lang_to_name.get(source_lang, "English")
+            system_prompt = (
+                f"You are a professional translator with expertise in {source_lang_name} and {languages_str}.\n"
+                f"Your task is to translate the given {source_lang_name} text while:\n"
+                "1. 🎯 Preserving the original meaning and context\n"
+                "2. 💫 Using natural, fluent language in the target languages\n"
+                "3. 🎭 Maintaining the tone and style of the original text\n"
+                "4. 🔍 Being attentive to cultural nuances\n"
+                "5. 📚 Using appropriate idioms when applicable\n\n"
+                f"Return translations in this exact JSON format:\n{format_str}"
+            )
+
         user_prompt = f"Translate this text with attention to context and cultural nuances: {text}"
 
+        logger.info(
+            f"🔄 [gpt-translate] mode={'auto' if auto_mode else 'known'} "
+            f"source={source_lang or 'auto'} targets={target_languages} "
+            f"input_len={len(text)}"
+        )
+
+        # timeout=20 на API-вызов — если OpenAI медлит, не блокируем бот навсегда
         response = openai_client.chat.completions.create(
             model="gpt-5.4-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            response_format={ "type": "json_object" }
+            response_format={"type": "json_object"},
+            timeout=20.0
         )
-        
-        # Парсим JSON ответ
+
         result = json.loads(response.choices[0].message.content)
-        logger.info(f"Получен перевод: {result}")
-        
-        # Добавляем переводы в результат
-        if 'english' in result and 'en' in target_languages:
-            translations['en'] = clean_text(result['english'])
-        if 'russian' in result and 'ru' in target_languages:
-            translations['ru'] = clean_text(result['russian'])
-        if 'indonesian' in result and 'id' in target_languages:
-            translations['id'] = clean_text(result['indonesian'])
-        if 'thai' in result and 'th' in target_languages:
-            translations['th'] = clean_text(result['thai'])
-            
+
+        # Telemetry: tokens used
+        usage = getattr(response, 'usage', None)
+        if usage:
+            logger.info(
+                f"  [gpt-translate] result tokens: in={usage.prompt_tokens} "
+                f"out={usage.completion_tokens} total={usage.total_tokens}"
+            )
+
+        detected = (result.get('detected_language') or source_lang or '').lower()
+        if auto_mode and detected:
+            logger.info(f"  [gpt-translate] detected source language: {detected}")
+
+        # Парсим переводы — пустые строки (когда source совпал с target) отбрасываем
+        for json_key, lang_code in json_key_to_lang.items():
+            if json_key in result and lang_code in target_languages:
+                value = (result.get(json_key) or '').strip()
+                if not value:
+                    continue
+                if auto_mode and detected and lang_code == detected:
+                    # Двойная защита: GPT мог не следовать инструкции
+                    continue
+                translations[lang_code] = clean_text(value)
+
     except Exception as e:
         logger.error(f"Ошибка при переводе: {str(e)}", exc_info=True)
         for lang in target_languages:
             if lang != source_lang and lang not in translations:
                 translations[lang] = "Error during translation"
-    
+
     return translations
 
 async def summarize_with_gpt(text: str, lang: str) -> str:
@@ -1031,6 +1067,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '2. Бот определит язык\n'
         '3. Переведет и/или саммаризирует согласно настройкам\n'
         '4. Покажет результат\n\n'
+        'ℹ️ В групповых чатах используй команды через "/". В приватных также можно через ">" '
+        '(короче, не нужно писать имя бота).\n\n'
         'Поддерживаемые языки:\n'
         'Русский, Индонезийский, Английский, Тайский\n\n'
         'Быстрые команды для языков:\n'
@@ -1903,6 +1941,10 @@ async def handle_alternative_commands(update: Update, context: ContextTypes.DEFA
 
 # === ПЕРЕВОД ТЕКСТОВЫХ СООБЩЕНИЙ (опциональная фича, флаг chat_settings.text_translate) ===
 _text_recently_translated = {}  # "chat_id:prefix50" -> timestamp
+_chat_text_locks = {}  # chat_id (int) -> asyncio.Lock — по одному переводу на чат за раз
+# Регулярка для определения "это уже наш предыдущий перевод" — строка начинается с флага.
+# Объединение Regional Indicator Symbols (U+1F1E6-U+1F1FF) — все флаги стран — + наши маркеры.
+_FLAG_LINE_RE = re.compile(r'(^|\n)\s*([\U0001F1E6-\U0001F1FF]{2}|🌐|📝)\s')
 
 
 def _is_text_duplicate(chat_id, text):
@@ -1922,13 +1964,28 @@ def _is_text_duplicate(chat_id, text):
     return False
 
 
-async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                              message, is_business: bool) -> None:
-    """Перевод текстовых сообщений. Активен только если в чате установлен флаг text_translate=True.
+def _get_chat_text_lock(chat_id):
+    """Возвращает asyncio.Lock для конкретного чата. Один перевод за раз на чат —
+    при бурсте сообщений их обрабатываем последовательно (не дёргаем OpenAI параллельно).
+    Между разными чатами параллелизм сохраняется."""
+    cid = int(chat_id)
+    if cid not in _chat_text_locks:
+        _chat_text_locks[cid] = asyncio.Lock()
+    return _chat_text_locks[cid]
 
-    Использует те же enabled_languages и translate_with_gpt что и для голосовых.
-    Переводит на все enabled_languages кроме источника. Отвечает reply'ем на исходное сообщение."""
-    text = (message.text or '').strip()
+
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                              message, is_business: bool,
+                              source_text: str = None, is_caption: bool = False) -> None:
+    """Перевод текстовых сообщений (или подписей к media). Активен только если в чате
+    установлен флаг text_translate=True.
+
+    source_text:  явный текст (для подписей под картинками/документами; для обычного
+                  текстового сообщения берётся из message.text)
+    is_caption:   True для подписи — отключает edit-path (нельзя редактировать caption
+                  как text; в media сообщениях у нас всегда reply)."""
+    raw = source_text if source_text is not None else (message.text or '')
+    text = raw.strip()
     if not text:
         return
 
@@ -1938,6 +1995,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Сообщения которые сами выглядят как наш перевод — не переводим (анти-петля)
     if text.startswith('🌐') or text.startswith('📝'):
+        return
+    # Любая строка начинается с флага страны — это наш предыдущий вывод; не повторяем
+    if _FLAG_LINE_RE.search(text):
         return
 
     # В тексте должно быть минимум 2 буквы любого алфавита — иначе нечего переводить
@@ -1954,15 +2014,13 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Симметрично с голосовым workflow: переводим ВСЕ сообщения (свои и чужие).
-    # Для бизнес-чата это значит ты будешь видеть и оригинал, и перевод своих сообщений —
-    # точно как для голосовых сейчас. Если в будущем захочется фильтра — добавим флаг.
 
     # Дебаунс — не переводим одно и то же дважды
     if _is_text_duplicate(message.chat.id, text):
         logger.info(f"[text-translate] Дубль в {chat_id_str}, пропуск")
         return
 
-    # Определяем источник + нормализуем
+    # Определяем источник по эвристике + нормализуем
     source_lang = detect_language(text)
     if source_lang == 'russian':    source_lang = 'ru'
     elif source_lang == 'english':  source_lang = 'en'
@@ -1970,78 +2028,99 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif source_lang == 'thai':     source_lang = 'th'
 
     enabled_languages = chat_settings.get("enabled_languages", ["ru", "en"])
-    target_languages = [lang for lang in enabled_languages if lang != source_lang]
+
+    # Если source_lang == 'unknown' (любой латинский алфавит — en/id/de/...) — переводим
+    # на ВСЕ enabled_languages, а translate_with_gpt в auto-mode сам определит source
+    # через GPT и НЕ переведёт на язык-источник (вернёт пустую строку, мы её отфильтруем).
+    if source_lang == 'unknown':
+        gpt_source = 'auto'
+        target_languages = list(enabled_languages)  # все, GPT отфильтрует
+    else:
+        gpt_source = source_lang
+        target_languages = [lang for lang in enabled_languages if lang != source_lang]
+
     if not target_languages:
         return  # источник = единственный включённый язык, переводить некуда
 
-    logger.info(f"📝 Перевод текста ({source_lang}→{target_languages}) в {chat_id_str}: {text[:80]}")
+    logger.info(
+        f"📝 [text-translate] chat={chat_id_str} biz={is_business} caption={is_caption} "
+        f"source={source_lang}→gpt_mode={gpt_source} targets={target_languages} "
+        f"text_len={len(text)}: {text[:80]}"
+    )
 
-    try:
-        translations = await translate_with_gpt(text, source_lang, target_languages)
-        if not translations:
-            logger.info(f"  [text-translate] Пустой результат GPT, пропуск")
-            return
+    # Per-chat lock: один GPT-вызов на чат одновременно (избегаем гонок при бурсте)
+    lock = _get_chat_text_lock(message.chat.id)
+    async with lock:
+        try:
+            translations = await translate_with_gpt(text, gpt_source, target_languages)
+            if not translations:
+                logger.info(f"  [text-translate] Пустой результат GPT, пропуск")
+                return
 
-        # Формируем блок переводов: 🇬🇧 ..., 🇮🇩 ..., ...
-        lines = []
-        for lang, trans in translations.items():
-            if not trans:
-                continue
-            emoji = LANG_EMOJIS.get(lang, '🌐')
-            lines.append(f"{emoji} {trans}")
-        translations_block = "\n".join(lines)
-        if not translations_block:
-            return
+            # Формируем блок переводов: 🇬🇧 ..., 🇮🇩 ..., ...
+            lines = []
+            for lang, trans in translations.items():
+                if not trans:
+                    continue
+                emoji = LANG_EMOJIS.get(lang, '🌐')
+                lines.append(f"{emoji} {trans}")
+            translations_block = "\n".join(lines)
+            if not translations_block:
+                return
 
-        # Если это моё сообщение в business-чате — редактируем оригинал
-        # (оставляем мой текст + добавляем перевод снизу). Зеркально с WhatsApp `edit:`.
-        # Если редактирование невозможно (чужое сообщение, не-business чат, edit упал) —
-        # шлём reply со встроенным переводом.
-        can_edit_own = (
-            is_business
-            and message.from_user
-            and OWNER_ID
-            and str(message.from_user.id) == str(OWNER_ID)
-        )
+            # EDIT-path: моё текстовое сообщение в business-чате (caption editing не поддерживаем)
+            can_edit_own = (
+                not is_caption
+                and is_business
+                and message.from_user
+                and OWNER_ID
+                and str(message.from_user.id) == str(OWNER_ID)
+            )
 
-        edited = False
-        if can_edit_own:
-            try:
+            edited = False
+            if can_edit_own:
+                try:
+                    bcid = getattr(message, 'business_connection_id', None)
+                    new_text = f"{text}\n\n{translations_block}"
+                    await context.bot.edit_message_text(
+                        chat_id=message.chat.id,
+                        message_id=message.message_id,
+                        business_connection_id=bcid,
+                        text=new_text
+                    )
+                    edited = True
+                    logger.info(f"  [text-translate] EDIT моего сообщения ({source_lang}→{','.join(target_languages)})")
+                except Exception as edit_err:
+                    logger.warning(f"  [text-translate] Edit не удался, fallback reply: {edit_err}")
+
+            if not edited:
+                # REPLY с quote оригинала
                 bcid = getattr(message, 'business_connection_id', None)
-                new_text = f"{text}\n\n{translations_block}"
-                await context.bot.edit_message_text(
-                    chat_id=message.chat.id,
-                    message_id=message.message_id,
-                    business_connection_id=bcid,
-                    text=new_text
-                )
-                edited = True
-                logger.info(f"  [text-translate] EDIT моего сообщения ({source_lang}→{','.join(target_languages)})")
-            except Exception as edit_err:
-                logger.warning(f"  [text-translate] Edit не удался, fallback reply: {edit_err}")
-
-        if not edited:
-            # Отправляем как REPLY с явным quote оригинала (чтобы было видно, что переводим)
-            bcid = getattr(message, 'business_connection_id', None)
-            try:
-                await context.bot.send_message(
-                    chat_id=message.chat.id,
-                    text=translations_block,
-                    reply_to_message_id=message.message_id,
-                    allow_sending_without_reply=True,
-                    business_connection_id=bcid,
-                )
-                logger.info(f"  [text-translate] Отправлен REPLY с quote ({source_lang}→{','.join(target_languages)})")
-            except Exception as send_err:
-                # Last-ditch fallback без quote — лишь бы перевод дошёл
-                logger.warning(f"  [text-translate] reply_to_message_id не сработал, отправляю без quote: {send_err}")
-                await safe_send_message(message, translations_block)
-    except Exception as e:
-        logger.error(f"Ошибка перевода текста в {chat_id_str}: {e}", exc_info=True)
+                try:
+                    await context.bot.send_message(
+                        chat_id=message.chat.id,
+                        text=translations_block,
+                        reply_to_message_id=message.message_id,
+                        allow_sending_without_reply=True,
+                        business_connection_id=bcid,
+                    )
+                    logger.info(f"  [text-translate] Отправлен REPLY с quote ({source_lang}→{','.join(target_languages)})")
+                except Exception as send_err:
+                    logger.warning(f"  [text-translate] reply_to_message_id не сработал, отправляю без quote: {send_err}")
+                    await safe_send_message(message, translations_block)
+        except Exception as e:
+            logger.error(f"Ошибка перевода текста в {chat_id_str}: {e}", exc_info=True)
 
 
 async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Универсальный обработчик для всех типов сообщений (обычных и бизнес)"""
+    # Явный фильтр edited-вариантов: edit-event на сообщение которое бот уже отредактировал
+    # может прилететь обратно и спровоцировать петлю. Безопаснее всего вообще не реагировать на edits.
+    if (getattr(update, 'edited_message', None) is not None
+            or getattr(update, 'edited_business_message', None) is not None
+            or getattr(update, 'edited_channel_post', None) is not None):
+        return
+
     # Определяем сообщение и тип
     if hasattr(update, 'business_message') and update.business_message:
         message = update.business_message
@@ -2079,6 +2158,10 @@ async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TY
     elif hasattr(message, 'text') and message.text:
         # Текстовое сообщение — переводим если флаг text_translate включён для чата
         await handle_text_message(update, context, message, is_business)
+    elif hasattr(message, 'caption') and message.caption:
+        # Картинка/документ/sticker с текстовой подписью — переводим подпись если флаг включён
+        # (как text, но reply, не edit — caption — не текст, edit_message_text работать не будет)
+        await handle_text_message(update, context, message, is_business, source_text=message.caption, is_caption=True)
 
 def _get_voice_duration(message, media_type: str) -> int:
     """Извлекает длительность аудио из сообщения"""
